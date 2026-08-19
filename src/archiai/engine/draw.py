@@ -108,6 +108,64 @@ def dimension_ortho(s, v, grid, offset=14.0):
 
 
 # ---------------------------------------------------------------------------
+class PlanBase:
+    """A framed, scaled plan sheet with the grid on it, ready to be drawn into.
+
+    Every discipline sheet starts here, so the electrical plan and the floor
+    plan sit at the same scale in the same place on the paper and can be
+    overlaid on a light table -- or in a browser."""
+
+    __slots__ = ("sheet", "view", "scale", "level", "floorplan", "grid",
+                 "bbox", "project")
+
+    def __init__(self, project, i, number, title, subtitle="", notes=None,
+                 paper="A1"):
+        lv = project.massing.levels[i]
+        s = Sheet(number, title, "1 : %d", paper, subtitle, project.info,
+                  notes or ["Generated from the parametric model.",
+                            "Do not scale; figured dimensions govern."])
+        x0, y0, x1, y1 = s.area()
+        grid = project.grid
+        bx = _expanded_bbox(lv.plate.bbox(), grid)
+        scale = fit_scale(bx, x1 - x0, y1 - y0, margin_mm=30.0)
+        s.scale_text = "1 : %d" % scale
+        s.frame()
+        mx, my = (bx[0] + bx[2]) / 2.0, (bx[1] + bx[3]) / 2.0
+        v = View(s, scale, (x0 + x1) / 2.0 - mx * 1000.0 / scale,
+                 (y0 + y1) / 2.0 + my * 1000.0 / scale)
+        self.sheet, self.view, self.scale = s, v, scale
+        self.level, self.floorplan = lv, project.floorplans[i]
+        self.grid, self.bbox, self.project = grid, bx, project
+
+    def walls(self, z_offset=1.5):
+        s, v = self.sheet, self.view
+        s.path(cut_path(v, self.project.massing.cut(self.level.ffl + z_offset)),
+               w="cut", color=INK, fill=s.pattern("concrete"), rule="evenodd")
+
+    def gridlines(self):
+        draw_grid(self.sheet, self.view, self.grid, self.bbox)
+
+    def furniture_ghost(self, opacity=0.30):
+        """Room outlines, faint, so a services sheet still reads as a plan."""
+        for r in self.floorplan.rooms:
+            self.sheet.path(ring_path(self.view, r.ring), w="fine",
+                            color="#b9bec4", fill="#fbfbfa")
+
+    def finish(self, legend_items=None, notes_title="NOTES", notes=None,
+               bar=True):
+        s, v = self.sheet, self.view
+        x0, y0, x1, y1 = s.area()
+        A.north_arrow(s, x1 - 26, y0 + 28)
+        if bar:
+            A.scale_bar(s, v, x0 + 8, y1 - 26, _bar_len(self.scale), 4,
+                        label="SCALE 1:%d" % self.scale)
+        if legend_items:
+            A.legend(s, x0 + 8, y0 + 18, legend_items)
+        if notes:
+            A.notes_block(s, x0 + 8, y1 - 40 - 3.4 * len(notes), notes_title, notes)
+        return s
+
+
 def plan_sheet(project, i, out, paper="A1"):
     lv = project.massing.levels[i]
     fp = project.floorplans[i]

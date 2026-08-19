@@ -122,6 +122,19 @@ class Sheet:
     def group(self, attrs=""):
         return _Group(self, attrs)
 
+    def grid_pattern(self, name, size_mm, stroke="#c8ccd0", width=0.1, bg="none"):
+        """A square grid at a given sheet size -- ceiling modules, paving, mesh."""
+        if name not in self._pat:
+            self._pat.add(name)
+            rect = ('<rect width="%s" height="%s" fill="%s"/>' % (f(size_mm), f(size_mm), bg)) \
+                if bg != "none" else ""
+            self.defs.append(
+                '<pattern id="%s" width="%s" height="%s" patternUnits="userSpaceOnUse">'
+                '%s<path d="M0 0 H%s M0 0 V%s" stroke="%s" stroke-width="%s" fill="none"/>'
+                '</pattern>' % (name, f(size_mm), f(size_mm), rect,
+                                f(size_mm), f(size_mm), stroke, f(width)))
+        return "url(#%s)" % name
+
     def clip(self, name, d):
         """Register a clip path from SVG path data and return its selector."""
         if name not in self._pat:

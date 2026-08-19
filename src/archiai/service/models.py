@@ -46,6 +46,9 @@ class GenerateRequest(BaseModel):
     idempotency_key: Optional[str] = None
     include_model: bool = True
     elevations: List[float] = Field(default_factory=lambda: [270.0, 0.0, 90.0, 180.0])
+    disciplines: Optional[List[str]] = Field(
+        None, description="Subset of architecture, structure, electrical, "
+                          "mechanical, public_health, fire. Omit for all.")
 
     def mode(self):
         given = [n for n in ("brief", "footprint", "spec") if getattr(self, n)]

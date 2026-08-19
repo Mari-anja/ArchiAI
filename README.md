@@ -129,7 +129,9 @@ section() / silhouette()   generic, derived from the above
 The same `cut(z)` call returns two curved annular bands for the torus and a
 rectangular band for a drawn polygon, and no drawing code knows which.
 
-One sentence produces a coordinated set:
+One sentence produces a coordinated set of **45 sheets across six
+disciplines** — architectural, structural, electrical, mechanical, public
+health and fire — in under two seconds:
 
 ```sh
 PYTHONPATH=src python3 -c "
@@ -138,6 +140,20 @@ spec, massing, brf = brief.from_text(
     'a five-storey school around a courtyard, 9000 sqm, entrance from the west')
 project.Project(massing, brf, {'number': 'DEMO'}).build('output/demo')"
 ```
+
+| Family | Sheets |
+|---|---|
+| Architectural | cover and register, site plan, floor plans, roof plan, reflected ceiling plans, elevations, sections, area schedule, axonometric |
+| Structural | foundation plan, framing plan per level |
+| Electrical | small power and data, lighting and emergency lighting |
+| Mechanical | ventilation per level |
+| Public health | below-ground drainage |
+| Fire | escape routes and travel distances per level |
+
+Every quantity on those sheets is computed, not decorated: luminaires from
+the lumen method, fresh air from occupancy, sprinkler heads from coverage
+limits, column loads from tributary area, pad footings from bearing pressure,
+travel distances checked against the escape limit.
 
 Verified across footprints that share no code: courtyard blocks, L-plans,
 slabs, towers with setbacks, hexagonal courts and rings all account for

@@ -52,9 +52,34 @@ def test_generate_from_brief_hits_the_target_area():
     gia = d["manifest"]["project"]["gia_m2"]
     assert abs(gia - 6000) / 6000 < 0.02, "GIA should land within 2%% of the brief"
     kinds = [a["kind"] for a in d["assets"]]
-    assert kinds.count("drawing") == 4 + 3     # a plan per level, 2 elevations, 1 section
     assert "model" in kinds and "manifest" in kinds
     assert d["cost_units"] > 0 and d["duration_ms"] >= 0
+
+
+def test_the_set_covers_every_discipline():
+    r = client.post("/v1/generate", json={
+        "brief": "a four-storey office around a courtyard, 6000 m2"})
+    sheets = [a for a in r.json()["assets"] if a["kind"] == "drawing"]
+    got = {a["meta"]["discipline"] for a in sheets}
+    assert got == {"architectural", "structural", "electrical", "mechanical",
+                   "public_health", "fire"}, got
+    numbers = {a["number"] for a in sheets}
+    for required in ("A-000", "A-010", "A-140", "A-200", "A-300", "A-700",
+                     "A-800", "S-010", "P-100"):
+        assert required in numbers, "missing %s" % required
+    # one plan, ceiling, power, lighting, ventilation and fire plan per storey
+    for prefix, count in (("A-1", 4 + 4 + 1), ("E-1", 4), ("E-2", 4),
+                          ("M-1", 4), ("FS-1", 4), ("S-1", 4)):
+        n = len([x for x in numbers if x.startswith(prefix)])
+        assert n == count, "%s: expected %d, got %d" % (prefix, count, n)
+
+
+def test_disciplines_can_be_filtered():
+    r = client.post("/v1/generate", json={
+        "brief": "a two-storey office, 1500 m2",
+        "disciplines": ["architecture"], "include_model": False})
+    sheets = [a for a in r.json()["assets"] if a["kind"] == "drawing"]
+    assert {a["meta"]["discipline"] for a in sheets} == {"architectural"}
 
 
 def test_generate_from_drawn_footprint():
@@ -140,3 +165,55 @@ def test_sections_and_elevations_are_non_degenerate():
     assert len(sec.cut) >= 2 and sec.slabs
     el = b.silhouette(270)
     assert el.outline and len(el.outline[0][0]) > 10
+
+
+# --- services engine -------------------------------------------------------
+
+def test_services_quantities_are_plausible():
+    from archiai.engine import services as SV
+    b = M.Extrusion(FOOTPRINTS["courtyard"], storeys=3, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="svc"), {"number": "T"})
+    fp = p.floorplans[0]
+    t = SV.totals(SV.for_floor(fp))
+    area = fp.plate.area
+    # a modern LED office lands between 4 and 12 W/m2
+    density = t["lighting_load_kw"] * 1000.0 / area
+    assert 3.0 <= density <= 14.0, "lighting %.1f W/m2" % density
+    # one sprinkler head covers no more than its rated area
+    assert t["sprinklers"] >= area / SV.SPRINKLER_COVERAGE * 0.6
+    assert t["occupants"] > 0 and t["fresh_air_lps"] > 0
+
+
+def test_structure_and_foundations_are_consistent():
+    from archiai.engine import services as SV
+    b = M.Extrusion(FOOTPRINTS["slab"], storeys=6, floor_to_floor=3.6)
+    p = PJ.Project(b, L.Brief(name="str"), {"number": "T"})
+    st = SV.structure(p, 0)
+    fd = SV.foundations(p)
+    assert st["storeys_above"] == 6
+    assert st["column_load_kn"] > 0
+    # pad area must satisfy the bearing pressure it was sized against
+    assert fd["pad_m"] ** 2 * fd["bearing_kpa"] >= fd["load_kn"] * 0.98
+    assert 150 <= st["slab_depth_mm"] <= 600
+
+
+def test_escape_distances_are_reported_against_the_limit():
+    from archiai.engine import services as SV
+    b = M.Extrusion(FOOTPRINTS["courtyard"], storeys=2, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="fire"), {"number": "T"})
+    e = SV.escape(p.floorplans[0])
+    assert e.routes and e.worst > 0
+    assert e.compliant == (e.worst <= e.limit)
+    assert all(r["travel_m"] >= r["direct_m"] for r in e.routes)
+
+
+def test_roof_plant_stands_on_the_roof():
+    from archiai.engine import services as SV
+    for name in ("courtyard", "hexagon", "ring", "L-shape"):
+        b = M.Extrusion(FOOTPRINTS[name], storeys=2, floor_to_floor=3.9)
+        p = PJ.Project(b, L.Brief(name=name), {"number": "T"})
+        rf = SV.roof(p)
+        top = p.massing.levels[-1].plate
+        assert all(top.contains(q) for q in rf["plant"]), \
+            "%s: plant enclosure is off the roof" % name
+        assert len(rf["outlets"]) >= 2

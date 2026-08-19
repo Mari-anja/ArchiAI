@@ -34,6 +34,17 @@ class Cam:
 LIGHT_DIR = (-0.36, -0.52, 0.77)
 
 
+def _newell(pts):
+    nx = ny = nz = 0.0
+    m = len(pts)
+    for i in range(m):
+        a, b = pts[i], pts[(i + 1) % m]
+        nx += (a[1] - b[1]) * (a[2] + b[2])
+        ny += (a[2] - b[2]) * (a[0] + b[0])
+        nz += (a[0] - b[0]) * (a[1] + b[1])
+    return (nx, ny, nz)
+
+
 def _norm(a):
     m = math.sqrt(sum(c * c for c in a)) or 1.0
     return (a[0] / m, a[1] / m, a[2] / m)
@@ -59,8 +70,11 @@ class Scene:
         self.faces = []          # (depth, points2d, fill, stroke, width)
 
     def quad(self, pts, base, stroke=None, w="hatch", cull=True, flat=None):
-        n = _norm(_cross((pts[1][0] - pts[0][0], pts[1][1] - pts[0][1], pts[1][2] - pts[0][2]),
-                         (pts[2][0] - pts[0][0], pts[2][1] - pts[0][1], pts[2][2] - pts[0][2])))
+        # Newell's method over every vertex. Taking the cross product of the
+        # first three points fails whenever they are nearly collinear, which is
+        # exactly what happens on a polygon traced round a curve -- the normal
+        # comes out as noise and the face shades almost black.
+        n = _norm(_newell(pts))
         if cull and sum(n[i] * self.cam.dir[i] for i in range(3)) <= 0.02:
             return
         d = sum(self.cam.depth(p) for p in pts) / len(pts)

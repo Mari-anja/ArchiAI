@@ -80,33 +80,23 @@ def assemble(req):
     return None, PJ.Project(massing, brf, info)
 
 
-def render_sheets(project, out_dir, elevations):
-    """Produce every sheet as bytes, without touching remote storage."""
-    project.build(out_dir, elevations=tuple(elevations))
+def render_sheets(project, out_dir, elevations, disciplines=None):
+    """Produce every sheet as bytes, without touching remote storage.
+
+    Takes the register the build returns rather than scanning the directory,
+    so sheet numbers stay authoritative across every discipline prefix."""
+    register = project.build(out_dir, elevations=tuple(elevations),
+                             disciplines=disciplines)
     sheets = []
-    d = os.path.join(out_dir, "drawings")
-    for fn in sorted(os.listdir(d)):
-        if not fn.endswith(".svg"):
-            continue
-        number = fn.rsplit("-A-", 1)[-1].replace(".svg", "")
-        with open(os.path.join(d, fn), "rb") as fh:
-            data = fh.read()
-        sheets.append({"filename": fn, "number": "A-%s" % number, "data": data})
+    for (number, title, scale, path) in register:
+        with open(path, "rb") as fh:
+            sheets.append({"filename": os.path.basename(path), "number": number,
+                           "title": title, "scale": scale, "data": fh.read()})
     return sheets
 
 
-SHEET_TITLES = {
-    "100": "Floor Plan", "200": "Elevations", "201": "Elevations", "300": "Sections",
-}
-
-
-def describe_sheet(number, project):
-    n = number.replace("A-", "")
-    if n.startswith("1"):
-        i = int(n[1:])
-        lv = project.massing.levels[i] if i < len(project.massing.levels) else None
-        return ("%s — Floor Plan" % (lv.name if lv else "Level"), "plan")
-    return (SHEET_TITLES.get(n, "Drawing"), "elevation" if n.startswith("2") else "section")
+DISCIPLINE = {"A": "architectural", "S": "structural", "E": "electrical",
+              "M": "mechanical", "P": "public_health", "FS": "fire"}
 
 
 def build_all(req, tmp_root):
@@ -115,18 +105,19 @@ def build_all(req, tmp_root):
     spec, project = assemble(req)
     gen_id = uuid.uuid4().hex
     out_dir = os.path.join(tmp_root, gen_id)
-    sheets = render_sheets(project, out_dir, req.elevations)
+    sheets = render_sheets(project, out_dir, req.elevations, req.disciplines)
 
     artefacts = []
     w, h = PAPER_MM["A1"]
     for s in sheets:
-        title, kind = describe_sheet(s["number"], project)
+        prefix = s["number"].split("-")[0]
         artefacts.append({
-            "kind": "drawing", "number": s["number"], "title": title,
+            "kind": "drawing", "number": s["number"], "title": s["title"],
             "filename": s["filename"], "data": s["data"],
             "content_type": "image/svg+xml", "width": w, "height": h,
-            "meta": {"sheet": s["number"], "sheet_kind": kind, "paper": "A1",
-                     "units": "mm"},
+            "meta": {"sheet": s["number"], "paper": "A1", "units": "mm",
+                     "scale": s["scale"],
+                     "discipline": DISCIPLINE.get(prefix, "architectural")},
         })
 
     model = None
@@ -147,7 +138,9 @@ def build_all(req, tmp_root):
                  "filename": "building.obj"}
 
     sheet_index = [{"number": a["number"], "title": a["title"],
-                    "filename": a["filename"], "paper": "A1"}
+                    "filename": a["filename"], "paper": "A1",
+                    "scale": a["meta"].get("scale"),
+                    "discipline": a["meta"].get("discipline")}
                    for a in artefacts if a["kind"] == "drawing"]
     man = EX.manifest(project, sheet_index, spec, model)
     artefacts.append({
