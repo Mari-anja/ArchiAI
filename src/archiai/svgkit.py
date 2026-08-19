@@ -76,12 +76,14 @@ class Sheet:
                  'stroke-linecap="%s"%s%s/>' % (f(x1), f(y1), f(x2), f(y2), color,
                                                 f(LW.get(w, w)), cap, d, o))
 
-    def path(self, d, w="thin", color=INK, fill="none", dash=None, op=None, cap="round", join="round"):
+    def path(self, d, w="thin", color=INK, fill="none", dash=None, op=None,
+             cap="round", join="round", rule=None):
         da = ' stroke-dasharray="%s"' % dash if dash else ""
         o = ' fill-opacity="%s"' % f(op) if op is not None else ""
+        fr = ' fill-rule="%s"' % rule if rule else ""
         sw = "" if w is None else ' stroke="%s" stroke-width="%s" stroke-linecap="%s" stroke-linejoin="%s"' % (
             color, f(LW.get(w, w)), cap, join)
-        self.add('<path d="%s" fill="%s"%s%s%s/>' % (d, fill, o, sw, da))
+        self.add('<path d="%s" fill="%s"%s%s%s%s/>' % (d, fill, o, fr, sw, da))
 
     def circle(self, cx, cy, r, w="thin", color=INK, fill="none", dash=None):
         d = ' stroke-dasharray="%s"' % dash if dash else ""
