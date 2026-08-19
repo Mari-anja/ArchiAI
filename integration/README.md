@@ -45,10 +45,13 @@ need one when they land; the response is already job-shaped (`status`,
 |---|---|
 | `GET /v1/health` | liveness, engine version, storage mode |
 | `POST /v1/parse` | read a brief, return the spec and every assumption. Free — call it as the user types |
+| `POST /v1/trace` | trace an uploaded sketch and return the outline, without building anything |
 | `POST /v1/generate` | generate, upload, return the manifest and asset list |
+| `POST /v1/view` | renders of a building, on their own |
 | `GET /docs` | live OpenAPI browser |
 
-`/v1/generate` takes exactly one of `brief`, `footprint` or `spec`.
+`/v1/generate` and `/v1/view` take exactly one of `brief`, `footprint`,
+`spec` or `image`.
 
 ```jsonc
 // text
@@ -59,10 +62,67 @@ need one when they land; the response is already job-shaped (`status`,
 { "footprint": { "outer": [[0,0],[54,0],[54,20],[30,20],[30,38],[0,38]],
                  "holes": [], "storeys": 3, "use": "gallery" } }
 
+// a photograph or scan of a shape the user sketched
+{ "image": { "data": "data:image/png;base64,...", "area_m2": 2400,
+             "storeys": 3, "use": "office" } }
+
 // explicit
 { "spec": { "use": "office", "shape": "courtyard", "storeys": 4,
             "area_m2": 6000, "entrance_azimuth": 270 } }
 ```
+
+## Uploads: trace first, then generate
+
+Call `/v1/trace` with the image, show the outline back to the user, and only
+then generate. The response is the ring in metres plus anything worth saying
+about it:
+
+```json
+{ "outer": [[-33.2,-21.6],[33.2,-21.6],[33.2,21.6],[-33.2,21.6]],
+  "holes": [[[-10.1,-7.2],[10.1,-7.2],[10.1,7.2],[-10.1,7.2]]],
+  "area_m2": 2400.0, "perimeter_m": 212.7, "width_m": 66.4, "depth_m": 43.2,
+  "vertices": 4, "notes": ["1 opening(s) read as courtyards."] }
+```
+
+Posting that `outer`/`holes` back as a `footprint` builds exactly the building
+the trace describes, so a user can nudge a corner before committing. PNG works
+with no extra server dependency; other formats need Pillow installed.
+
+`simplify` (default `0.010`) controls how hard a shaky line is smoothed, and
+`straighten` (default `22`, degrees) how far an edge can be off square and
+still be snapped onto it. Send `straighten: 0` to keep an outline exactly as
+drawn.
+
+## Views
+
+`/v1/view` rebuilds the building from the same input and renders it. Nothing
+is stored between calls: the engine is deterministic, so the same input is
+the same building tomorrow.
+
+```jsonc
+{ "brief": "a six-storey office of 11000 sqm with a courtyard",
+  "views": [
+    { "name": "aerial-ne", "label": "Site aerial",
+      "addons": ["ground","sky","shadow","context","trees","cars","people"] },
+    { "name": "entrance", "hour": 9.5, "addons": ["ground","sky","shadow","people"] },
+    { "name": "aerial-sw", "label": "Cutaway", "addons": ["ground","sky","shadow","cutaway"] }
+  ] }
+```
+
+- **Names**: `aerial-ne` `aerial-nw` `aerial-se` `aerial-sw` `eye-north`
+  `eye-south` `eye-east` `eye-west` `entrance` `courtyard` `roof` `axo`
+  `worm`. Framing, distance and eye height are worked out from the model, so
+  a name alone is enough; `azimuth`, `elevation`, `distance`, `eye_height`
+  and `fov` override it.
+- **Styles**: `material` `clay` `white` `line`.
+- **Add-ons**: `ground` `sky` `shadow` `context` `trees` `cars` `people`
+  `cutaway`. Omit for `ground`, `sky`, `shadow`.
+- **Light**: `latitude`, `day_of_year` and `hour` give a real solar position,
+  so shadows fall where they would fall. `sky` is `day` `clear` `overcast`
+  `evening` or `none`.
+
+Views come back as SVG, sized by `width` and `height`. `/v1/generate` accepts
+the same `views` array, so a set arrives with its pictures.
 
 ## What `/v1/parse` is for
 
@@ -94,4 +154,9 @@ feeling the tool understood them and a user feeling it guessed.
 - **The service role key never leaves the server.** Uploads happen inside the
   engine container.
 - **Limits** are enforced with `ARCHIAI_MAX_STOREYS` and
-  `ARCHIAI_MAX_AREA_M2`, both returning `422` with a readable reason.
+  `ARCHIAI_MAX_AREA_M2`, both returning `422` with a readable reason. Uploads
+  are capped at 12 MB and 40 megapixels; a request may ask for at most 12
+  views, each at most 4000 x 4000.
+- **Renders are the deterministic pass.** They are drawn from the model, not
+  generated, which is what makes them repeatable and what makes them a usable
+  base for a photoreal pass later.
