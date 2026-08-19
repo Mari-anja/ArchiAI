@@ -35,10 +35,54 @@ class SpecInput(BaseModel):
     name: Optional[str] = None
 
 
+class ImageInput(BaseModel):
+    """A photograph or scan of a sketch, or an exported plan image.
+
+    The outline is traced deterministically: the same picture always gives the
+    same footprint. Give a size -- either the floor area of one plate or the
+    overall width -- or the outline comes back at one pixel to the metre."""
+    data: str = Field(..., description="Base64 image, or a data: URL. PNG "
+                                       "always works; other formats need "
+                                       "Pillow on the server.")
+    area_m2: Optional[float] = Field(None, gt=0, le=200000,
+                                     description="Area of one floor plate")
+    width_m: Optional[float] = Field(None, gt=1.0, le=2000.0,
+                                     description="Overall width, if known")
+    storeys: int = Field(3, ge=1, le=60)
+    floor_to_floor: float = Field(3.9, gt=2.0, le=12.0)
+    use: str = "office"
+    entrance_azimuth: float = 270.0
+    name: Optional[str] = None
+    simplify: float = Field(0.010, ge=0.001, le=0.08,
+                            description="How hard to smooth a shaky line")
+    straighten: float = Field(22.0, ge=0.0, le=45.0,
+                              description="Degrees within which an edge is "
+                                          "snapped square; 0 leaves the "
+                                          "outline exactly as drawn")
+
+
+class TraceRequest(BaseModel):
+    """Trace an upload without building anything, so the outline can be shown
+    back to the person who drew it before a set is generated."""
+    image: ImageInput
+
+
+class TraceResponse(BaseModel):
+    outer: List[List[float]]
+    holes: List[List[List[float]]]
+    area_m2: float
+    perimeter_m: float
+    width_m: float
+    depth_m: float
+    vertices: int
+    notes: List[str]
+
+
 class GenerateRequest(BaseModel):
     brief: Optional[str] = Field(None, description="Plain-language brief")
     footprint: Optional[FootprintInput] = None
     spec: Optional[SpecInput] = None
+    image: Optional[ImageInput] = None
 
     project_id: Optional[str] = Field(None, description="Your projects.id, echoed back")
     number: Optional[str] = Field(None, description="Drawing number prefix")
@@ -51,9 +95,11 @@ class GenerateRequest(BaseModel):
                           "mechanical, public_health, fire. Omit for all.")
 
     def mode(self):
-        given = [n for n in ("brief", "footprint", "spec") if getattr(self, n)]
+        given = [n for n in ("brief", "footprint", "spec", "image")
+                 if getattr(self, n)]
         if len(given) != 1:
-            raise ValueError("supply exactly one of brief, footprint or spec")
+            raise ValueError("supply exactly one of brief, footprint, spec "
+                             "or image")
         return given[0]
 
 

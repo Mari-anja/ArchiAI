@@ -13,6 +13,7 @@ from ..engine import massing as M
 from ..engine import project as PJ
 from ..engine import export as EX
 from ..engine import draw
+from . import images as IMG
 from .config import settings
 
 PAPER_MM = {"A1": (841, 594), "A2": (594, 420), "A3": (420, 297)}
@@ -33,6 +34,23 @@ def _guard(storeys, area):
     if area and storeys * area > settings.max_area * 12:
         raise Refused("storeys x floor area is too large for a single request; "
                       "split the scheme or raise ARCHIAI_MAX_AREA_M2")
+
+
+def _from_region(region, opts, info, default_name):
+    """A traced or drawn outline plus a use becomes a Project."""
+    if region.area < 25.0:
+        raise Refused("the outline encloses only %.1f m2; give an area or a "
+                      "width so it can be scaled" % region.area)
+    d = B.USE_DEFAULTS.get(opts.use, B.USE_DEFAULTS["office"])
+    massing = M.Extrusion(region, storeys=opts.storeys,
+                          floor_to_floor=opts.floor_to_floor)
+    brf = L.Brief(use=opts.use, daylight_depth=d["daylight"],
+                  corridor_w=d["corridor"], room_width=d["room_w"],
+                  entrance_azimuth=opts.entrance_azimuth,
+                  name=getattr(opts, "name", None) or default_name)
+    brf.accommodation = B.ACCOMMODATION.get(opts.use, B.ACCOMMODATION["office"])
+    info["subtitle"] = brf.name
+    return PJ.Project(massing, brf, info)
 
 
 def assemble(req):
@@ -60,6 +78,18 @@ def assemble(req):
         massing, brf = B.build(spec)
         info["subtitle"] = spec.name
         return spec, PJ.Project(massing, brf, info)
+
+    if mode == "image":
+        im = req.image
+        _guard(im.storeys, im.area_m2)
+        try:
+            region = IMG.footprint_from_upload(
+                im.data, area_m2=im.area_m2, width_m=im.width_m,
+                simplify=im.simplify, straighten=im.straighten)
+        except ValueError as e:
+            raise Refused(str(e))
+        return None, _from_region(region, im, info,
+                                  im.name or "Traced from an upload")
 
     f = req.footprint
     _guard(f.storeys, None)

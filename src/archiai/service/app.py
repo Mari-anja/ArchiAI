@@ -17,11 +17,13 @@ from starlette.concurrency import run_in_threadpool
 
 from ..engine import brief as B
 from ..engine import export as EX
+from ..engine import geom2d as G
 from .config import settings
 from .storage import make_storage
 from .models import (GenerateRequest, GenerateResponse, ParseRequest,
-                     ParseResponse, Asset)
+                     ParseResponse, TraceRequest, TraceResponse, Asset)
 from . import generate as gen
+from . import images as IMG
 
 app = FastAPI(
     title="ArchiAI building engine",
@@ -71,6 +73,39 @@ def parse(req: ParseRequest, _=Depends(require_key)):
         estimated_sheets=sheets,
         estimated_cost_units=20 + 6 * sheets + 2 * spec.storeys,
     )
+
+
+@app.post("/v1/trace", response_model=TraceResponse)
+async def trace(req: TraceRequest, _=Depends(require_key)):
+    """Trace an uploaded sketch and hand back the outline, nothing more.
+
+    The point is to show someone what was read from their drawing before a
+    whole set is generated from it. The same outline posted back as a
+    footprint builds exactly the building this returns."""
+    im = req.image
+    try:
+        region = await run_in_threadpool(
+            IMG.footprint_from_upload, im.data, im.area_m2, im.width_m,
+            im.simplify, im.straighten)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    x0, y0, x1, y1 = region.bbox()
+    notes = []
+    if not (im.area_m2 or im.width_m):
+        notes.append("No size given, so the outline is at one pixel to the "
+                     "metre. Send area_m2 or width_m to scale it.")
+    if len(region.outer) > 40:
+        notes.append("The outline came back with %d corners; raise simplify "
+                     "to smooth it further." % len(region.outer))
+    if region.holes:
+        notes.append("%d opening(s) read as courtyards." % len(region.holes))
+    return TraceResponse(
+        outer=[[round(x, 3), round(y, 3)] for (x, y) in region.outer],
+        holes=[[[round(x, 3), round(y, 3)] for (x, y) in h] for h in region.holes],
+        area_m2=round(region.area, 1),
+        perimeter_m=round(G.perimeter(region.outer), 1),
+        width_m=round(x1 - x0, 2), depth_m=round(y1 - y0, 2),
+        vertices=len(region.outer), notes=notes)
 
 
 @app.post("/v1/generate", response_model=GenerateResponse)
