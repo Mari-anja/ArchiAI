@@ -34,7 +34,26 @@ is in **[docs/design-report.md](docs/design-report.md)**.
 ## What is here
 
 ```
-src/archiai/          the parametric model — one source of truth
+src/archiai/engine/   the shape-agnostic engine
+  geom2d.py           rings, regions with holes, offsetting, line/region ops
+  massing.py          the Massing protocol + Extrusion and Revolve typologies
+  layout.py           daylight bands, circulation spine, cores, programme
+  grid.py             orthogonal and radial setting-out grids
+  draw.py             plans, elevations and sections for any typology
+  brief.py            plain-language brief -> spec -> massing
+  project.py          massing + brief -> floorplans -> sheets
+  export.py           OBJ mesh and project manifest
+
+src/archiai/service/  HTTP surface over the engine
+  app.py              FastAPI: /v1/parse, /v1/generate, /v1/health
+  storage.py          local disk or Supabase Storage, same interface
+  generate.py         request -> project -> sheets, mesh, manifest
+
+integration/          Arqio integration: SQL migration, TypeScript client
+deploy/               Dockerfile and environment template
+tests/                26 tests over the service and engine invariants
+
+src/archiai/          the TORUS project — one source of truth
   params.py           every dimension in the project
   program.py          accommodation schedule as annular sectors
   svgkit.py           a small ISO-style drafting kit that writes SVG
@@ -94,12 +113,66 @@ actually needs:
 The viewer, the mesh and the drawings are generated from the same geometry
 functions, so they cannot drift apart.
 
+## The engine
+
+The torus above is one building. The engine generalises it: every drawing
+only ever asks a building four questions, so any typology that answers them
+gets plans, sections, elevations and a mesh for free.
+
+```
+plate(i)        floor plate at a level     ->  plans, areas, framing
+cut(z)          solid material at height   ->  plan cut lines
+build_mesh()    the envelope               ->  3D, renders
+section() / silhouette()   generic, derived from the above
+```
+
+The same `cut(z)` call returns two curved annular bands for the torus and a
+rectangular band for a drawn polygon, and no drawing code knows which.
+
+One sentence produces a coordinated set:
+
+```sh
+PYTHONPATH=src python3 -c "
+from archiai.engine import brief, project
+spec, massing, brf = brief.from_text(
+    'a five-storey school around a courtyard, 9000 sqm, entrance from the west')
+project.Project(massing, brf, {'number': 'DEMO'}).build('output/demo')"
+```
+
+Verified across footprints that share no code: courtyard blocks, L-plans,
+slabs, towers with setbacks, hexagonal courts and rings all account for
+95–97% of their floor plate, the remainder being wall thickness.
+
+## The service
+
+A stateless HTTP service wraps the engine so a platform can call it.
+Generation is synchronous because it is fast — a five-storey school with
+eight sheets, a mesh and a manifest takes about **400 ms**.
+
+```sh
+docker build -f deploy/Dockerfile -t archiai-engine .
+docker run -p 8080:8080 --env-file deploy/env.example archiai-engine
+```
+
+| | |
+|---|---|
+| `GET /v1/health` | liveness, engine version, storage mode |
+| `POST /v1/parse` | read a brief, return the spec **and every assumption made** |
+| `POST /v1/generate` | generate, upload, return manifest and asset list |
+
+`/v1/generate` takes exactly one of `brief`, `footprint` (a drawn outline in
+metres) or `spec`. Files go to local disk or Supabase Storage behind one
+interface. See [integration/README.md](integration/README.md) for the SQL
+migration, the TypeScript client and the token-metering flow.
+
 ## Rebuilding
 
 Pure Python 3, standard library only. No dependencies, no build step.
 
 ```sh
-python3 -m archiai.build output          # from src/, or with PYTHONPATH=src
+python3 -m archiai.build output          # the TORUS project
+PYTHONPATH=src python3 -m pytest tests -q # 26 tests
+PYTHONPATH=src python3 -m archiai.service # the HTTP service on :8080
 ```
 
 ```

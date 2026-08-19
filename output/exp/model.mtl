@@ -1,0 +1,24 @@
+# ArchiAI generated materials
+newmtl shell
+Kd 0.72 0.74 0.76
+Ks 0.18 0.18 0.18
+Ns 32
+d 1.0
+
+newmtl wall
+Kd 0.78 0.77 0.74
+Ks 0.06 0.06 0.06
+Ns 12
+d 1.0
+
+newmtl roof
+Kd 0.55 0.57 0.58
+Ks 0.10 0.10 0.10
+Ns 20
+d 1.0
+
+newmtl slab
+Kd 0.82 0.80 0.77
+Ks 0.04 0.04 0.04
+Ns 10
+d 1.0
