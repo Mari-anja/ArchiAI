@@ -9,6 +9,8 @@ import asyncio
 import hmac
 import os
 import tempfile
+import time
+import uuid
 from collections import OrderedDict
 
 from fastapi import FastAPI, HTTPException, Request, Depends
@@ -21,7 +23,8 @@ from ..engine import geom2d as G
 from .config import settings
 from .storage import make_storage
 from .models import (GenerateRequest, GenerateResponse, ParseRequest,
-                     ParseResponse, TraceRequest, TraceResponse, Asset)
+                     ParseResponse, TraceRequest, TraceResponse, ViewRequest,
+                     Asset)
 from . import generate as gen
 from . import images as IMG
 
@@ -52,6 +55,24 @@ def require_key(request: Request):
     if not any(hmac.compare_digest(token, k) for k in settings.api_keys):
         raise HTTPException(status_code=401, detail="missing or invalid bearer token")
     return token
+
+
+async def _publish(storage, prefix, artefacts):
+    """Upload everything concurrently and describe it back to the caller."""
+    async def one(a):
+        stored = await storage.put("%s/%s" % (prefix, a["filename"]),
+                                   a["data"], a["content_type"])
+        return Asset(kind=a["kind"], number=a.get("number"),
+                     title=a.get("title"), scale=a.get("scale"),
+                     key=stored.key, url=stored.url, bytes=stored.size,
+                     content_type=stored.content_type,
+                     width=a.get("width", 0), height=a.get("height", 0),
+                     meta=a.get("meta", {}))
+
+    try:
+        return list(await asyncio.gather(*(one(a) for a in artefacts)))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail="storage: %s" % e)
 
 
 @app.get("/v1/health")
@@ -127,24 +148,53 @@ async def generate(req: GenerateRequest, _=Depends(require_key)):
 
     storage = make_storage()
     prefix = "%s/%s" % (req.project_id or "anonymous", gen_id)
-
-    async def upload(a):
-        stored = await storage.put("%s/%s" % (prefix, a["filename"]),
-                                   a["data"], a["content_type"])
-        return Asset(kind=a["kind"], number=a.get("number"), title=a.get("title"),
-                     scale=a.get("scale"), key=stored.key, url=stored.url,
-                     bytes=stored.size, content_type=stored.content_type,
-                     width=a.get("width", 0), height=a.get("height", 0),
-                     meta=a.get("meta", {}))
-
-    try:
-        assets = await asyncio.gather(*(upload(a) for a in artefacts))
-    except RuntimeError as e:
-        raise HTTPException(status_code=502, detail="storage: %s" % e)
+    assets = await _publish(storage, prefix, artefacts)
 
     body = GenerateResponse(
         generation_id=gen_id, project_id=req.project_id, duration_ms=ms,
-        cost_units=man["totals"]["cost_units"], manifest=man, assets=list(assets))
+        cost_units=man["totals"]["cost_units"], manifest=man, assets=assets)
+    if req.idempotency_key:
+        _remember(req.idempotency_key, body)
+    return body
+
+
+@app.post("/v1/view", response_model=GenerateResponse)
+async def view(req: ViewRequest, _=Depends(require_key)):
+    """Pictures of a building that has already been described.
+
+    The building is rebuilt from the same input rather than stored, because
+    the engine is deterministic: the same brief, footprint, spec or image
+    always gives the same building, so a view asked for a week later is a view
+    of the same thing."""
+    try:
+        req.mode()
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if req.idempotency_key and req.idempotency_key in _idempotent:
+        _idempotent.move_to_end(req.idempotency_key)
+        return _idempotent[req.idempotency_key]
+    t0 = time.time()
+    try:
+        _spec, project = await run_in_threadpool(gen.assemble, req)
+        views = await run_in_threadpool(gen.render_views, project, req.views)
+    except gen.Refused as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    gen_id = uuid.uuid4().hex
+    prefix = "%s/%s" % (req.project_id or "anonymous", gen_id)
+    assets = await _publish(make_storage(), prefix, views)
+    body = GenerateResponse(
+        status="complete", generation_id=gen_id, project_id=req.project_id,
+        duration_ms=int((time.time() - t0) * 1000),
+        cost_units=len(views), assets=assets,
+        manifest={"engine": EX.ENGINE_VERSION,
+                  "project": {"name": project.info.get("name"),
+                              "number": project.info.get("number"),
+                              "storeys": len(project.massing.levels),
+                              "gia_m2": round(project.gia, 1)},
+                  "views": [{"number": v["number"], "title": v["title"],
+                             "filename": v["filename"], **v["meta"]}
+                            for v in views]})
     if req.idempotency_key:
         _remember(req.idempotency_key, body)
     return body

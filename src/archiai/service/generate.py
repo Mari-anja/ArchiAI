@@ -56,8 +56,9 @@ def _from_region(region, opts, info, default_name):
 def assemble(req):
     """Request -> (spec | None, Project). Pure; no file or network access."""
     mode = req.mode()
-    info = {"number": req.number or "AAI-%s" % uuid.uuid4().hex[:6].upper()}
-    if req.client:
+    info = {"number": getattr(req, "number", None)
+            or "AAI-%s" % uuid.uuid4().hex[:6].upper()}
+    if getattr(req, "client", None):
         info["client"] = req.client
 
     if mode == "brief":
@@ -125,6 +126,41 @@ def render_sheets(project, out_dir, elevations, disciplines=None):
     return sheets
 
 
+MAX_VIEW_PIXELS = 4000 * 4000
+
+
+def render_views(project, views):
+    """Every requested view, as an SVG artefact with what it shows recorded."""
+    from ..engine import view as VW
+    out = []
+    for i, v in enumerate(views):
+        if v.width * v.height > MAX_VIEW_PIXELS:
+            raise Refused("view %d is larger than the pixel limit" % (i + 1))
+        try:
+            svg = VW.render(project, name=v.name, style=v.style,
+                            addons=tuple(v.addons) if v.addons is not None else None,
+                            width=v.width, height=v.height,
+                            latitude=v.latitude, day=v.day_of_year, hour=v.hour,
+                            sky=v.sky, fov=v.fov, azimuth=v.azimuth,
+                            elevation=v.elevation, distance=v.distance,
+                            eye_height=v.eye_height, cut_azimuth=v.cut_azimuth)
+        except ValueError as e:
+            raise Refused(str(e))
+        meta = VW.describe(project, v.name, v.latitude, v.day_of_year, v.hour)
+        meta.update({"style": v.style,
+                     "addons": list(v.addons) if v.addons is not None
+                     else list(VW.DEFAULT_ADDONS),
+                     "sky": v.sky, "label": v.label or v.name})
+        out.append({
+            "kind": "view", "number": "V-%03d" % (i + 1),
+            "title": v.label or v.name.replace("-", " ").title(),
+            "filename": "view-%02d-%s.svg" % (i + 1, v.name.replace("/", "-")),
+            "data": svg.encode("utf-8"), "content_type": "image/svg+xml",
+            "width": v.width, "height": v.height, "meta": meta,
+        })
+    return out
+
+
 DISCIPLINE = {"A": "architectural", "S": "structural", "E": "electrical",
               "M": "mechanical", "P": "public_health", "FS": "fire"}
 
@@ -167,12 +203,18 @@ def build_all(req, tmp_root):
         model = {"format": "obj", "vertices": nv, "faces": nf,
                  "filename": "building.obj"}
 
+    views = render_views(project, req.views or [])
+    artefacts.extend(views)
+
     sheet_index = [{"number": a["number"], "title": a["title"],
                     "filename": a["filename"], "paper": "A1",
                     "scale": a["meta"].get("scale"),
                     "discipline": a["meta"].get("discipline")}
                    for a in artefacts if a["kind"] == "drawing"]
     man = EX.manifest(project, sheet_index, spec, model)
+    if views:
+        man["views"] = [{"number": v["number"], "title": v["title"],
+                         "filename": v["filename"], **v["meta"]} for v in views]
     artefacts.append({
         "kind": "manifest", "filename": "manifest.json",
         "data": json.dumps(man, indent=2).encode("utf-8"),

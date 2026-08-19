@@ -570,3 +570,163 @@ def test_uploads_are_refused_clearly_when_they_are_not_usable():
     two = client.post("/v1/generate", json={"brief": "an office",
                                             "image": {"data": "aGk="}})
     assert two.status_code == 422
+
+
+# --- views and renders ------------------------------------------------------
+
+def test_the_sun_is_where_the_sun_is():
+    from archiai.engine import view as V
+    _v, alt, az = V.sun(51.5, 172, 12.0)          # London, midsummer noon
+    assert 60.0 < alt < 64.0 and abs(az - 180.0) < 1.0
+    _v, alt, az = V.sun(51.5, 355, 12.0)          # midwinter noon
+    assert 13.0 < alt < 17.0 and abs(az - 180.0) < 1.0
+    _v, alt, az = V.sun(-33.9, 355, 12.0)         # Sydney, their midsummer
+    assert alt > 75.0 and (az < 5.0 or az > 355.0)
+    _v, alt, _az = V.sun(51.5, 172, 1.0)          # the middle of the night
+    assert alt < 0.0
+
+
+def test_the_shadow_falls_away_from_the_sun():
+    from archiai.engine import view as V
+    b = M.Extrusion(FOOTPRINTS["slab"], storeys=4, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="sun"), {"number": "T"})
+    cx, cy = G.centroid(b.footprint().outer)
+    for hour, ex, ey in ((9.0, -1.0, 0.0), (14.0, 1.0, 0.0), (12.0, 0.0, 1.0)):
+        sd, alt, _az = V.sun(51.5, 172, hour)
+        quads = V.shadow_quads(p, sd, alt)
+        assert quads, "no shadow at %.0f:00" % hour
+        pts = [q for quad in quads for q in quad]
+        mx = sum(q[0] for q in pts) / len(pts) - cx
+        my = sum(q[1] for q in pts) / len(pts) - cy
+        if ex:
+            assert mx * ex > 0, "shadow at %.0f:00 fell the wrong way" % hour
+        if ey:
+            assert my * ey > 0, "shadow at %.0f:00 fell the wrong way" % hour
+        assert all(abs(q[2]) < 0.05 for q in pts), "shadow left the ground"
+    # and none at night
+    sd, alt, _az = V.sun(51.5, 172, 1.0)
+    assert V.shadow_quads(p, sd, alt) == []
+
+
+def test_every_named_view_renders_for_every_shape():
+    from archiai.engine import view as V
+    for name in ("slab", "courtyard", "tower", "hexagon"):
+        b = M.Extrusion(FOOTPRINTS[name], storeys=3, floor_to_floor=3.9)
+        p = PJ.Project(b, L.Brief(name=name), {"number": "T"})
+        for v in V.NAMED:
+            svg = V.render(p, v, width=640, height=400)
+            assert svg.startswith("<svg") and svg.endswith("</svg>")
+            assert svg.count("<path") > 30, "%s/%s drew %d paths" % (
+                name, v, svg.count("<path"))
+
+
+def test_a_view_is_the_same_picture_every_time():
+    """Determinism is what lets a view be asked for again later."""
+    from archiai.engine import view as V
+    b = M.Extrusion(FOOTPRINTS["courtyard"], storeys=4, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="det"), {"number": "T"})
+    kw = dict(addons=("ground", "sky", "shadow", "context", "trees", "cars",
+                      "people"), width=800, height=500)
+    assert V.render(p, "aerial-ne", **kw) == V.render(p, "aerial-ne", **kw)
+    q = PJ.Project(M.Extrusion(FOOTPRINTS["courtyard"], storeys=4,
+                               floor_to_floor=3.9),
+                   L.Brief(name="det"), {"number": "T"})
+    assert V.render(p, "aerial-ne", **kw) == V.render(q, "aerial-ne", **kw)
+
+
+def test_cameras_stand_outside_the_building_and_frame_it():
+    from archiai.engine import view as V
+    for name in ("slab", "courtyard", "tower"):
+        for storeys in (1, 4, 14):
+            b = M.Extrusion(FOOTPRINTS[name], storeys=storeys,
+                            floor_to_floor=3.9)
+            p = PJ.Project(b, L.Brief(name=name), {"number": "T"})
+            plate = b.footprint()
+            for v in ("entrance", "eye-south", "eye-east", "aerial-ne",
+                      "aerial-sw"):
+                cam = V.camera(p, v, width=1600, height=1000)
+                assert not plate.contains((cam.eye[0], cam.eye[1])), \
+                    "%s/%d: the %s camera is inside the building" % (
+                        name, storeys, v)
+                # the building fits the frame
+                x0, y0, x1, y1 = plate.bbox()
+                corners = [(x, y, z) for x in (x0, x1) for y in (y0, y1)
+                           for z in (0.0, b.height)]
+                for c in corners:
+                    cc = cam.to_cam(c)
+                    if cc[2] < cam.NEAR:
+                        continue
+                    px, py = cam.project(cc)
+                    assert -80 <= px <= cam.width + 80, \
+                        "%s/%d/%s: %.0f off frame" % (name, storeys, v, px)
+                    assert -80 <= py <= cam.height + 80, \
+                        "%s/%d/%s: %.0f off frame" % (name, storeys, v, py)
+
+
+def test_a_courtyard_view_stands_in_the_courtyard():
+    from archiai.engine import view as V
+    b = M.Extrusion(FOOTPRINTS["courtyard"], storeys=4, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="court"), {"number": "T"})
+    cam = V.camera(p, "courtyard")
+    hole = b.footprint().holes[0]
+    assert G.point_in_ring((cam.eye[0], cam.eye[1]), hole)
+    assert 1.0 < cam.eye[2] < 3.0
+    # a building without one falls back to a view that exists
+    solid_b = M.Extrusion(FOOTPRINTS["slab"], storeys=2, floor_to_floor=3.9)
+    q = PJ.Project(solid_b, L.Brief(name="solid"), {"number": "T"})
+    assert V.render(q, "courtyard", width=640, height=400).startswith("<svg")
+
+
+def test_unknown_views_styles_and_addons_are_refused():
+    from archiai.engine import view as V
+    b = M.Extrusion(FOOTPRINTS["slab"], storeys=2, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="bad"), {"number": "T"})
+    for kw in ({"name": "from-the-moon"}, {"style": "photoreal"},
+               {"addons": ("ground", "unicorns")}):
+        with pytest.raises(ValueError):
+            V.render(p, **kw)
+
+
+def test_the_view_endpoint_returns_pictures_of_the_same_building():
+    r = client.post("/v1/view", json={
+        "brief": "a 5 storey office of 8000 m2 with a courtyard",
+        "views": [{"name": "aerial-ne", "width": 800, "height": 500},
+                  {"name": "entrance", "width": 800, "height": 500,
+                   "hour": 9.0, "label": "Arrival"},
+                  {"name": "axo", "style": "line", "addons": [],
+                   "width": 800, "height": 500}]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["assets"]) == 3
+    assert all(a["kind"] == "view" for a in body["assets"])
+    assert body["assets"][1]["title"] == "Arrival"
+    assert all(a["content_type"] == "image/svg+xml" for a in body["assets"])
+    sun = body["manifest"]["views"][1]["sun"]
+    assert sun["hour"] == 9.0 and sun["altitude_deg"] > 0
+
+    # the same brief through /v1/generate describes the same building
+    g = client.post("/v1/generate", json={
+        "brief": "a 5 storey office of 8000 m2 with a courtyard",
+        "disciplines": ["architecture"]})
+    assert abs(g.json()["manifest"]["project"]["gia_m2"]
+               - body["manifest"]["project"]["gia_m2"]) < 1.0
+
+    bad = client.post("/v1/view", json={"brief": "an office",
+                                        "views": [{"name": "nowhere"}]})
+    assert bad.status_code == 422
+    none = client.post("/v1/view", json={"brief": "an office", "views": []})
+    assert none.status_code == 422
+
+
+def test_generate_can_include_views_with_the_drawings():
+    r = client.post("/v1/generate", json={
+        "brief": "a 3 storey school of 4000 m2",
+        "disciplines": ["architecture"],
+        "views": [{"name": "aerial-nw", "width": 640, "height": 400},
+                  {"name": "eye-south", "width": 640, "height": 400}]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    kinds = [a["kind"] for a in body["assets"]]
+    assert kinds.count("view") == 2 and kinds.count("drawing") > 5
+    assert len(body["manifest"]["views"]) == 2
+    assert body["manifest"]["views"][0]["projection"] == "perspective"
