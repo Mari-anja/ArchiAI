@@ -42,7 +42,8 @@ class Project:
 
         `disciplines` selects families: architecture, electrical, mechanical,
         public_health, fire, structure. Omit for everything."""
-        from . import draw, draw_services as DS, draw_schedules as DSC
+        from . import (draw, draw_services as DS, draw_schedules as DSC,
+               draw_details as DD)
         want = set(disciplines or ("architecture", "electrical", "mechanical",
                                    "public_health", "fire", "structure"))
         d = os.path.join(out_dir, "drawings")
@@ -72,6 +73,9 @@ class Project:
                     draw.elevation_sheet, self, list(elevations[2:]), number="A-201")
             add("A-300", "Sections", "1:150", draw.section_sheet, self,
                 self.default_cuts())
+            add("A-400", "Typical Wall Section", "1:50",
+                DD.wall_section_sheet, self)
+            add("A-500", "Envelope Details", "1:10", DD.details_sheet, self)
             add("A-700", "Area Schedule and Accommodation", "—",
                 DSC.schedule_sheet, self)
             add("A-710", "Door and Window Schedule", "—",

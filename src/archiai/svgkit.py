@@ -299,6 +299,20 @@ _PATTERNS = {
     "water":    '<pattern id="water" width="4" height="3" patternUnits="userSpaceOnUse">'
                 '<rect width="4" height="3" fill="#e8f1f6"/>'
                 '<path d="M0 1.5 Q1 0.7 2 1.5 T4 1.5" fill="none" stroke="#9dc2d8" stroke-width="0.15"/></pattern>',
+    "block":    '<pattern id="block" width="5.2" height="2.6" patternUnits="userSpaceOnUse">'
+                '<rect width="5.2" height="2.6" fill="#eceae5"/>'
+                '<path d="M0 0 H5.2 M0 2.6 H5.2 M2.6 0 V2.6" stroke="#b3ada2" stroke-width="0.13" fill="none"/></pattern>',
+    "gravel":   '<pattern id="gravel" width="3.4" height="3.4" patternUnits="userSpaceOnUse">'
+                '<rect width="3.4" height="3.4" fill="#f0eee9"/>'
+                '<circle cx="0.9" cy="1.1" r="0.34" fill="none" stroke="#b8b1a4" stroke-width="0.12"/>'
+                '<circle cx="2.4" cy="2.5" r="0.42" fill="none" stroke="#b8b1a4" stroke-width="0.12"/>'
+                '<circle cx="2.7" cy="0.7" r="0.26" fill="none" stroke="#c6bfb2" stroke-width="0.1"/></pattern>',
+    "plaster":  '<pattern id="plaster" width="1.0" height="1.0" patternUnits="userSpaceOnUse">'
+                '<rect width="1.0" height="1.0" fill="#f7f6f3"/>'
+                '<circle cx="0.5" cy="0.5" r="0.055" fill="#bdbcb6"/></pattern>',
+    "timber":   '<pattern id="timber" width="4.0" height="2.0" patternUnits="userSpaceOnUse">'
+                '<rect width="4.0" height="2.0" fill="#f3ece0"/>'
+                '<path d="M0 0.6 Q2 0.2 4 0.6 M0 1.5 Q2 1.1 4 1.5" fill="none" stroke="#c9b48e" stroke-width="0.11"/></pattern>',
     "paving":   '<pattern id="paving" width="6" height="6" patternUnits="userSpaceOnUse">'
                 '<rect width="6" height="6" fill="#f4f3f0"/>'
                 '<path d="M0 0 H6 M0 0 V6" stroke="#dcd9d2" stroke-width="0.13"/></pattern>',

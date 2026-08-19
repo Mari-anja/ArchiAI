@@ -301,3 +301,102 @@ def test_door_and_window_sheet_is_produced_for_every_shape():
             assert "DOOR SCHEDULE" in svg and "WINDOW SCHEDULE" in svg
             assert "DOOR KEY PLAN" in svg
             assert len(svg) > 8000
+
+
+# --- construction build-ups and details -------------------------------------
+
+def test_build_ups_match_the_model_they_are_cut_from():
+    from archiai.engine import buildup as BU
+    for wall_t in (0.28, 0.35, 0.45):
+        b = M.Extrusion(FOOTPRINTS["slab"], storeys=4, floor_to_floor=3.9)
+        p = PJ.Project(b, L.Brief(name="bu", wall_t=wall_t), {"number": "T"})
+        w = BU.external_wall(p)
+        assert all(l.t > 0 for l in w), "a layer came out at zero thickness"
+        # the drawn wall is the wall the plan cuts, to the nearest millimetre
+        assert abs(sum(l.t for l in w) - wall_t * 1000.0) <= 2.0
+        # the floor zone plus the clear height is the floor to floor height
+        flr = BU.upper_floor(p)
+        zone = sum(l.t for l in flr)
+        assert abs(zone + 2700.0 - 3900.0) <= 2.0, "zone %.0f" % zone
+        # and the slab in the build-up is the slab the structure sized
+        from archiai.engine import services as SV
+        assert flr[2].t == SV.structure(p, 0)["slab_depth_mm"]
+
+
+def test_u_values_are_in_a_buildable_range():
+    from archiai.engine import buildup as BU
+    b = M.Extrusion(FOOTPRINTS["courtyard"], storeys=3, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="u"), {"number": "T"})
+    sm = BU.summary(p)
+    assert 0.10 <= sm["wall"]["u"] <= 0.45
+    assert 0.08 <= sm["roof"]["u"] <= 0.30
+    assert 0.08 <= sm["ground"]["u"] <= 0.35
+    # a roof carries more insulation than a wall, so it performs better
+    assert sm["roof"]["u"] < sm["wall"]["u"]
+
+
+def test_details_and_wall_section_are_drawn_for_every_shape():
+    from archiai.engine import draw_details as DD
+    with tempfile.TemporaryDirectory() as d:
+        for name in ("slab", "courtyard", "hexagon", "ring", "L-shape"):
+            b = M.Extrusion(FOOTPRINTS[name], storeys=3, floor_to_floor=3.9)
+            p = PJ.Project(b, L.Brief(name=name), {"number": "T"})
+            det = os.path.join(d, "%s-500.svg" % name)
+            sec = os.path.join(d, "%s-400.svg" % name)
+            DD.details_sheet(p, det)
+            DD.wall_section_sheet(p, sec)
+            a = open(det).read()
+            for title in ("FOUNDATION AND GROUND FLOOR JUNCTION",
+                          "INTERMEDIATE FLOOR EDGE AND SPANDREL",
+                          "PARAPET AND ROOF EDGE", "CURTAIN WALL JAMB"):
+                assert title in a, "%s: %s missing" % (name, title)
+            c = open(sec).read()
+            assert "BUILD-UPS" in c and "HEIGHTS" in c
+            assert "WHERE THE SECTION IS CUT" in c
+            assert len(a) > 20000 and len(c) > 12000
+
+
+def test_the_wall_section_follows_a_curved_envelope():
+    """A leaning or curved facade must be drawn as it is, not straightened."""
+    import math
+    from archiai.engine import massing as MM
+    from archiai.engine import draw_details as DD
+    prof = [(30.0 + 7.5 * math.cos(math.radians(a)),
+             2.1 + 7.5 * math.sin(math.radians(a))) for a in range(-160, 161, 5)]
+
+    def plate(z):
+        dx = math.sqrt(7.5 ** 2 - (z - 2.1) ** 2)
+        return G.Region(G.circle(30.0 + dx, 96),
+                        [G.circle(max(30.0 - dx, 0.5), 96)])
+
+    b = MM.Revolve(prof, plates=[(0.0, plate(0.0)), (4.2, plate(4.2))])
+    p = PJ.Project(b, L.Brief(name="revolve"), {"number": "T"})
+    faces = [b.extent_at(z, (1.0, 0.0))[1] for z in (0.3, 2.1, 5.0, 8.0)]
+    assert max(faces) - min(faces) > 1.0, "this envelope should not be straight"
+    # the drawn wall must move with the envelope, not stand straight
+    from archiai.svgkit import Sheet, View
+    from archiai.engine import buildup as BU
+    sh = Sheet("A-400", "t", "1:50", "A1", "", {"number": "T"})
+    v = View(sh, 50, 200.0, 400.0)
+    before = len(sh.body)
+    DD.swept_wall(sh, v, BU.external_wall(p),
+                  lambda z: b.extent_at(min(max(z, 0.05), b.height - 0.05),
+                                        (1.0, 0.0))[1],
+                  0.0, b.height)
+    xs = []
+    for tag in sh.body[before:]:
+        for chunk in tag.split('d="')[1:]:
+            for tok in chunk.split('"')[0].replace("M", " ").replace("L", " ").split():
+                try:
+                    xs.append(float(tok))
+                except ValueError:
+                    pass
+    span = (max(faces) - min(faces)) * 1000.0 / 50.0        # mm on the sheet
+    drawn = max(xs[::2]) - min(xs[::2])
+    assert drawn > span * 0.8, "facade drawn %.1f mm wide, expected %.1f" % (
+        drawn, span)
+
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "rev.svg")
+        DD.wall_section_sheet(p, out)
+        assert len(open(out).read()) > 12000
