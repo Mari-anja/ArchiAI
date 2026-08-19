@@ -196,7 +196,7 @@ def _point_and_normal(ring, cum, frac):
 
 
 def subdivide_band(outer, inner, target_w, code_prefix="R", name="Workspace",
-                   cat="work", start_index=1, min_area=6.0, max_area=None):
+                   cat="work", start_index=1, min_area=2.5, max_area=None):
     """Cut the band between two rings into rooms about `target_w` wide."""
     outer = G.resample(G.ccw(G.dedupe(outer)), max(0.5, target_w / 10.0))
     inner = G.resample(G.ccw(G.dedupe(inner)), max(0.5, target_w / 10.0))
@@ -204,39 +204,47 @@ def subdivide_band(outer, inner, target_w, code_prefix="R", name="Workspace",
     total = cum[-1]
     n = max(1, int(round(total / target_w)))
     band_area = abs(G.area(outer) - G.area(inner))
-    cap = max_area if max_area else max(min_area * 2.0, 3.0 * band_area / n)
+    cap = max_area if max_area else max(min_area * 2.0, 6.0 * band_area / n)
 
     # Which way across the band? For a perimeter band the far edge is inboard;
     # for a band around a courtyard it is outboard. Decide once, by sampling,
     # so a concave corner can never flip the direction mid-run.
     sign = _crossing_sign(outer, cum, inner)
 
-    cuts = []
+    hits = []
     for i in range(n):
-        frac = i / n
-        p, nrm, _ = _point_and_normal(outer, cum, frac)
+        p, nrm, _ = _point_and_normal(outer, cum, i / n)
         d = (nrm[0] * sign, nrm[1] * sign)
         hit = ray_ring_hit(p, d, inner)
-        if hit is None:
+        if hit is None:                          # try the other side
             hit = ray_ring_hit(p, (-d[0], -d[1]), inner)
         if hit is None:                          # corner: mitre into it
             hit = nearest_on_ring(p, inner)
-        cuts.append((frac, p, hit))
+        hits.append(hit)
+
+    cum_i = _cum(inner)
+    walk = _monotonic(cum_i, hits)
+    walk.append(walk[0] + cum_i[-1])             # close the loop
 
     rooms, idx = [], start_index
     for i in range(n):
-        f0, p0, h0 = cuts[i]
-        f1, p1, h1 = cuts[(i + 1) % n]
-        if h0 is None or h1 is None:
-            continue
-        outer_pts = ring_arc(outer, _pos_from_frac(outer, cum, f0),
-                             _pos_from_frac(outer, cum, f1), forward=True)
-        inner_pts = ring_arc(inner, (h1[1], h1[2]), (h0[1], h0[2]), forward=False)
+        outer_pts = ring_arc(outer, _pos_from_frac(outer, cum, i / n),
+                             _pos_from_frac(outer, cum, (i + 1) / n), forward=True)
+        if walk[i + 1] - walk[i] > 1e-6:
+            inner_pts = ring_arc(inner, _pos_at_length(cum_i, walk[i + 1]),
+                                 _pos_at_length(cum_i, walk[i]), forward=False)
+        else:
+            inner_pts = [_pos_point(inner, cum_i, walk[i])]
         ring = G.dedupe(outer_pts + inner_pts)
         if len(ring) >= 3 and min_area <= G.area(ring) <= cap:
             rooms.append(Room("%s.%02d" % (code_prefix, idx), name, G.ccw(ring), cat))
             idx += 1
     return rooms
+
+
+def _pos_point(ring, cum, t):
+    e, s = _pos_at_length(cum, t)
+    return _at(ring, e, s)
 
 
 def _crossing_sign(outer, cum, inner, samples=7):
@@ -256,6 +264,46 @@ def _crossing_sign(outer, cum, inner, samples=7):
     return 1.0 if votes > 0 else -1.0
 
 
+def _pos_scalar(cum, edge, s):
+    """(edge, s) -> arc length along the ring."""
+    seg = cum[edge + 1] - cum[edge]
+    return cum[edge] + seg * s
+
+
+def _pos_at_length(cum, t):
+    """Arc length -> (edge, s), wrapping."""
+    total = cum[-1]
+    t = t % total
+    lo, hi = 0, len(cum) - 2
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if cum[mid + 1] <= t:
+            lo = mid + 1
+        else:
+            hi = mid
+    seg = cum[lo + 1] - cum[lo] or 1.0
+    return (lo, (t - cum[lo]) / seg)
+
+
+def _monotonic(cum_inner, hits):
+    """Force the projections to advance the same way round as the reference.
+
+    Walking the outer edge one way must walk the inner edge the same way. At a
+    corner the projection can land behind its predecessor, and a naive walk
+    then traverses almost the whole ring backwards and returns a cell the size
+    of the building. Any backward step is clamped to zero, which collapses that
+    cell into the mitre triangle it should have been."""
+    total = cum_inner[-1]
+    out = [_pos_scalar(cum_inner, hits[0][1], hits[0][2])]
+    for h in hits[1:]:
+        raw = _pos_scalar(cum_inner, h[1], h[2])
+        delta = (raw - out[-1]) % total
+        if delta > total * 0.5:
+            delta = 0.0
+        out.append(out[-1] + delta)
+    return out
+
+
 def _pos_from_frac(ring, cum, frac):
     t = frac * cum[-1]
     for k in range(len(cum) - 1):
@@ -263,6 +311,61 @@ def _pos_from_frac(ring, cum, frac):
             seg = cum[k + 1] - cum[k] or 1.0
             return (k, (t - cum[k]) / seg)
     return (0, 0.0)
+
+
+PUBLIC_FIRST = ("recep", "amenity", "meet", "work", "plant")
+UPPER_FIRST = ("work", "meet", "amenity", "plant")
+
+
+def programme_for_level(brief, level_index):
+    """Order the schedule for this floor.
+
+    On the ground floor the public rooms sit nearest the entrance and the
+    plant goes furthest from it; upstairs the reception drops out and the
+    floor is workspace-led. It is the ordering an architect would reach for
+    without thinking about it, and it is the only thing standing between a
+    plan with room names and a plan that is actually organised."""
+    prog = list(getattr(brief, "accommodation", []) or [])
+    if not prog:
+        return []
+    if level_index == 0:
+        rank = PUBLIC_FIRST
+    else:
+        prog = [p for p in prog if p[2] != "recep"]
+        rank = UPPER_FIRST
+        total = sum(p[1] for p in prog) or 1.0
+        prog = [(n, sh / total, c) for (n, sh, c) in prog]
+    return sorted(prog, key=lambda p: rank.index(p[2]) if p[2] in rank else 99)
+
+
+def assign_programme(rooms, brief, centre, level_index):
+    """Walk the plan from the entrance and fill the schedule in order."""
+    prog = programme_for_level(brief, level_index)
+    if not prog:
+        return
+    free = [r for r in rooms if r.cat != "core"]
+    if not free:
+        return
+    ent = math.radians(getattr(brief, "entrance_azimuth", 270.0))
+
+    def sweep(r):
+        cx, cy = r.centroid
+        return (math.atan2(cy - centre[1], cx - centre[0]) - ent) % (2 * math.pi)
+
+    free.sort(key=sweep)
+    total = sum(r.area for r in free)
+    i = 0
+    for (name, share, cat) in prog:
+        quota = total * share
+        got = 0.0
+        while i < len(free) and got < quota - 1e-9:
+            r = free[i]
+            r.name, r.cat = name, cat
+            got += r.area
+            i += 1
+    fallback = prog[0]
+    for r in free[i:]:
+        r.name, r.cat = fallback[0], fallback[2]
 
 
 def allocate(level, brief, level_index=0):
@@ -316,6 +419,8 @@ def allocate(level, brief, level_index=0):
             pick.name = "Core %s" % chr(ord("A") + placed)
             pick.code = "%s.C%d" % (prefix, placed + 1)
             placed += 1
+
+    assign_programme(rooms, brief, G.centroid(plate.outer), level_index)
 
     circ = G.Region(core_ring.outer, core_ring.holes) if core_ring.outer else None
     return Floorplan(level, rooms, circ, plate)
