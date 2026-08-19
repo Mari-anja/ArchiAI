@@ -194,3 +194,255 @@ def _notes(s, x, y, project, fp, lv, scale):
         "Rooms this level: %d" % len(fp.rooms),
     ]
     A.notes_block(s, x, y, "GENERAL NOTES", lines)
+
+
+# ---------------------------------------------------------------------------
+# Sections
+# ---------------------------------------------------------------------------
+def _line_hit_u(a, b, p0, u):
+    """Where a plan line a-b crosses the section plane, as a u coordinate."""
+    ex, ey = b[0] - a[0], b[1] - a[1]
+    den = u[0] * ey - u[1] * ex
+    if abs(den) < 1e-12:
+        return None
+    rx, ry = a[0] - p0[0], a[1] - p0[1]
+    t = (rx * ey - ry * ex) / den
+    s = (rx * u[1] - ry * u[0]) / den
+    return t if -1e-9 <= s <= 1 + 1e-9 else None
+
+
+def _section_extent(res):
+    lo = hi = None
+    for (z, a, b) in res.beyond:
+        lo = a if lo is None else min(lo, a)
+        hi = b if hi is None else max(hi, b)
+    if lo is None:
+        lo, hi = -1.0, 1.0
+    return lo, hi
+
+
+def draw_section(s, v, project, res, ground=True):
+    poche = s.pattern("concrete")
+    lo, hi = _section_extent(res)
+    pad = (hi - lo) * 0.12 + 4.0
+
+    if ground:
+        s.path(d_poly(v, [(lo - pad, 0), (hi + pad, 0), (hi + pad, -1.6),
+                          (lo - pad, -1.6)], True), w=None, fill=s.pattern("earth"))
+        a, b = v.p(lo - pad, 0), v.p(hi + pad, 0)
+        s.line(a[0], a[1], b[0], b[1], w="cut", color=INK)
+
+    # Everything past the cut plane. Drawn as an elevation rather than a solid
+    # fill, so a courtyard reads as a courtyard with the far wing behind it and
+    # not as a block of material.
+    if res.beyond:
+        left = [(a, z) for (z, a, b) in res.beyond]
+        right = [(b, z) for (z, a, b) in res.beyond]
+        s.path(d_poly(v, left + right[::-1], True), w=None, fill="#f7f7f5")
+        for (name, z) in res.levels:
+            lo_z = min((b for (zz, a, b) in res.beyond if abs(zz - z) < 0.2), default=None)
+            hi_z = max((b for (zz, a, b) in res.beyond if abs(zz - z) < 0.2), default=None)
+            lo_a = min((a for (zz, a, b) in res.beyond if abs(zz - z) < 0.2), default=None)
+            if lo_a is None:
+                continue
+            p, q = v.p(lo_a, z), v.p(hi_z, z)
+            s.line(p[0], p[1], q[0], q[1], w="fine", color="#c3c3bc")
+        s.path(d_poly(v, left + right[::-1], True), w="fine", color="#c9c9c2")
+
+    for (u0, u1, z, t) in res.slabs:
+        s.path(d_poly(v, [(u0, z), (u1, z), (u1, z - t), (u0, z - t)], True),
+               w="cut", color=INK, fill=poche)
+
+    for (poly, closed) in res.cut:
+        s.path(d_poly(v, poly, closed), w="cut", color=INK, fill=poche)
+
+    for (name, z) in res.levels:
+        A.level_tag(s, *v.p(hi + pad * 0.55, z), z, name.upper())
+    top = project.massing.height
+    A.level_tag(s, *v.p(hi + pad * 0.55, top), top, "ROOF")
+
+    A.dim_linear(s, v, (lo, 0), (hi, 0), -14.0)
+    A.dim_linear(s, v, (lo - pad * 0.5, 0), (lo - pad * 0.5, top), 8.0)
+    for (name, z) in res.levels[:-1]:
+        nxt = [zz for (_, zz) in res.levels if zz > z + 1e-6]
+        if nxt:
+            A.dim_linear(s, v, (lo - pad * 0.2, z), (lo - pad * 0.2, min(nxt)), 8.0)
+    return lo, hi
+
+
+def draw_section_grid(s, v, project, p0, u, top):
+    grid = project.grid
+    if not isinstance(grid, OrthoGrid):
+        return
+    seen = []
+    for ln in grid.lines():
+        t = _line_hit_u(ln.a, ln.b, p0, u)
+        if t is None or any(abs(t - q) < 0.05 for q in seen):
+            continue
+        seen.append(t)
+        a, b = v.p(t, -0.9), v.p(t, top + 1.6)
+        s.line(a[0], a[1], b[0], b[1], w="grid", color=BLUE, dash="6,2,1,2")
+        cx, cy = v.p(t, top + 2.6)
+        s.circle(cx, cy, 3.4, w="grid", color=BLUE, fill="#ffffff")
+        s.text(cx, cy + 0.75, ln.label, 2.1, "middle", BLUE, "600")
+
+
+def section_sheet(project, cuts, out, paper="A1", number="A-300"):
+    P = project.info
+    s = Sheet(number, "Sections", "1 : 100", paper,
+              " and ".join("%s-%s" % (c[0], c[0]) for c in cuts), P,
+              ["Section planes located on the floor plans.",
+               "Generated from the parametric model."])
+    x0, y0, x1, y1 = s.area()
+    aw, ah = x1 - x0, y1 - y0
+
+    results = [(tag, cap, project.massing.section(p0, d), p0, d)
+               for (tag, p0, d, cap) in cuts]
+    top = project.massing.height
+    widest = 0.0
+    for (_, _, res, _, _) in results:
+        lo, hi = _section_extent(res)
+        widest = max(widest, (hi - lo) * 1.30)
+    n = len(results)
+    lane = ah / n
+    scale = fit_scale((0, 0, widest, (top + 6.0) * n * 1.25), aw, ah, margin_mm=30.0)
+    s.scale_text = "1 : %d" % scale
+    s.frame()
+
+    for i, (tag, cap, res, p0, d) in enumerate(results):
+        base = y0 + lane * (i + 1) - lane * 0.30
+        cx = (x0 + x1) / 2.0
+        lo, hi = _section_extent(res)
+        v = View(s, scale, cx - ((lo + hi) / 2.0) * 1000.0 / scale, base)
+        draw_section(s, v, project, res)
+        l = math.hypot(d[0], d[1]) or 1.0
+        draw_section_grid(s, v, project, p0, (d[0] / l, d[1] / l), top)
+        s.text(x0 + 10, base + 30, "SECTION %s-%s" % (tag, tag), 5.0, "start",
+               INK, "700", spacing=0.8)
+        s.text(x0 + 10, base + 37, cap, 2.4, "start", GREY)
+
+    A.scale_bar(s, View(s, scale, 0, 0), x0 + 8, y1 - 24, _bar_len(scale), 4,
+                label="SCALE 1:%d" % scale)
+    return s.save(out)
+
+
+# ---------------------------------------------------------------------------
+# Elevations
+# ---------------------------------------------------------------------------
+COMPASS = {0: "EAST", 90: "NORTH", 180: "WEST", 270: "SOUTH"}
+
+
+def facade_bays(project, azimuth):
+    """Grid positions that read as vertical lines in this elevation."""
+    a = math.radians(azimuth)
+    right = (-math.sin(a), math.cos(a))
+    out = []
+    for ln in project.grid.lines():
+        if ln.a is None:
+            continue
+        pa = ln.a[0] * right[0] + ln.a[1] * right[1]
+        pb = ln.b[0] * right[0] + ln.b[1] * right[1]
+        if abs(pa - pb) < 0.25:                      # edge-on: a vertical line
+            out.append((pa + pb) / 2.0)
+    return sorted(set(round(x, 3) for x in out))
+
+
+def draw_windows(s, v, project, azimuth, lo, hi, sill=0.95, head_gap=0.75,
+                 reveal=0.85):
+    """One window per structural bay per storey, clipped to the silhouette."""
+    bays = [x for x in facade_bays(project, azimuth) if lo - 0.01 <= x <= hi + 0.01]
+    if len(bays) < 2:
+        n = max(2, int(round((hi - lo) / project.brief.room_width)) + 1)
+        bays = [lo + (hi - lo) * i / (n - 1) for i in range(n)]
+    levels = project.massing.levels
+    for k, lv in enumerate(levels):
+        top = (levels[k + 1].ffl if k + 1 < len(levels)
+               else project.massing.height)
+        z0, z1 = lv.ffl + sill, top - head_gap
+        if z1 - z0 < 0.6:
+            continue
+        e0, e1 = project.massing.extent_at(lv.ffl + 1.2, _axis(azimuth))
+        for i in range(len(bays) - 1):
+            a0, a1 = bays[i] + reveal, bays[i + 1] - reveal
+            if a1 - a0 < 0.5 or a0 < e0 or a1 > e1:
+                continue
+            s.path(d_poly(v, [(a0, z0), (a1, z0), (a1, z1), (a0, z1)], True),
+                   w="thin", color="#5c6a76", fill="#cfdae4")
+
+
+def _axis(azimuth):
+    a = math.radians(azimuth)
+    return (-math.sin(a), math.cos(a))
+
+
+def draw_elevation(s, v, project, el, top, azimuth=270):
+    lo = hi = None
+    for (poly, closed) in el.outline:
+        for (x, z) in poly:
+            lo = x if lo is None else min(lo, x)
+            hi = x if hi is None else max(hi, x)
+    if lo is None:
+        return 0.0, 0.0
+    pad = (hi - lo) * 0.12 + 4.0
+    s.path(d_poly(v, [(lo - pad, 0), (hi + pad, 0), (hi + pad, -1.6),
+                      (lo - pad, -1.6)], True), w=None, fill=s.pattern("earth"))
+    a, b = v.p(lo - pad, 0), v.p(hi + pad, 0)
+    s.line(a[0], a[1], b[0], b[1], w="cut", color=INK)
+
+    for (poly, closed) in el.outline:
+        s.path(d_poly(v, poly, closed), w=None, fill="#eef2f6")
+    draw_windows(s, v, project, azimuth, lo, hi)
+    for (z, chains) in el.joints:
+        for (poly, closed) in chains:
+            s.path(d_poly(v, poly, closed), w="med", color="#5c6a76")
+    for (poly, closed) in el.outline:
+        s.path(d_poly(v, poly, closed), w="outline", color=INK)
+
+    for (name, z) in [(l.name, l.ffl) for l in project.massing.levels] + [("ROOF", top)]:
+        A.level_tag(s, *v.p(hi + pad * 0.55, z), z, name.upper())
+    A.dim_linear(s, v, (lo, 0), (hi, 0), -14.0)
+    A.dim_linear(s, v, (lo - pad * 0.5, 0), (lo - pad * 0.5, top), 8.0)
+    return lo, hi
+
+
+def elevation_sheet(project, azimuths, out, paper="A1", number="A-200"):
+    P = project.info
+    names = " and ".join(COMPASS.get(int(a) % 360, "%d°" % a) for a in azimuths)
+    s = Sheet(number, "Elevations", "1 : 100", paper, names.title(), P,
+              ["Orthographic projection.",
+               "Generated from the parametric model."])
+    x0, y0, x1, y1 = s.area()
+    aw, ah = x1 - x0, y1 - y0
+    top = project.massing.height
+    els = [(az, project.massing.silhouette(az)) for az in azimuths]
+
+    widest = 0.0
+    for (_, el) in els:
+        xs = [x for (poly, _) in el.outline for (x, z) in poly]
+        if xs:
+            widest = max(widest, (max(xs) - min(xs)) * 1.30)
+    n = len(els)
+    lane = ah / n
+    scale = fit_scale((0, 0, widest, (top + 6.0) * n * 1.25), aw, ah, margin_mm=30.0)
+    s.scale_text = "1 : %d" % scale
+    s.frame()
+
+    for i, (az, el) in enumerate(els):
+        base = y0 + lane * (i + 1) - lane * 0.30
+        xs = [x for (poly, _) in el.outline for (x, z) in poly]
+        mid = (min(xs) + max(xs)) / 2.0 if xs else 0.0
+        v = View(s, scale, (x0 + x1) / 2.0 - mid * 1000.0 / scale, base)
+        draw_elevation(s, v, project, el, top, az)
+        label = COMPASS.get(int(az) % 360, "%d°" % az)
+        s.text(x0 + 10, base + 30, "%s ELEVATION" % label, 5.0, "start", INK,
+               "700", spacing=0.8)
+        s.text(x0 + 10, base + 37, "Looking %s" % _looking(az), 2.4, "start", GREY)
+
+    A.scale_bar(s, View(s, scale, 0, 0), x0 + 8, y1 - 24, _bar_len(scale), 4,
+                label="SCALE 1:%d" % scale)
+    return s.save(out)
+
+
+def _looking(az):
+    return {0: "west", 90: "south", 180: "east", 270: "north"}.get(int(az) % 360,
+                                                                  "toward the centre")

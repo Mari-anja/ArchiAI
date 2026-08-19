@@ -137,10 +137,25 @@ class SectionResult:
     """A vertical cut, in the section plane's own 2D frame: u across, v up."""
 
     def __init__(self):
-        self.cut = []        # closed/open polylines through solid material
+        self.cut = []        # closed polygons of material
         self.slabs = []      # (u0, u1, z_top, thickness) per level
-        self.beyond = []     # polylines visible past the cut plane
+        self.beyond = []     # (z, lo, hi) extent of everything past the cut
         self.levels = []     # (name, ffl)
+
+
+def _trace(run):
+    """Turn a run of stable interval counts into closed polygons."""
+    if len(run) < 2:
+        return []
+    k = len(run[0][1])
+    out = []
+    for j in range(k):
+        left = [(ivs[j][0], z) for (z, ivs) in run]
+        right = [(ivs[j][1], z) for (z, ivs) in run]
+        poly = left + right[::-1]
+        if len(poly) >= 3:
+            out.append((poly, True))
+    return out
 
 
 class Elevation2D:
@@ -188,46 +203,91 @@ class Massing:
     def gia(self):
         return sum(l.area for l in self.levels)
 
-    def section(self, p0, direction, half_width=None):
-        """Cut on the vertical plane through p0 along `direction` (a plan vector)."""
+    def bands_at(self, z):
+        """cut(z) normalised to a list of Bands."""
+        c = self.cut(z)
+        return list(c) if isinstance(c, (list, tuple)) else [c]
+
+    def solid_intervals(self, z, p0, u):
+        """Where a horizontal line through the solid at height z is material."""
+        out = []
+        for b in self.bands_at(z):
+            outer = G.region_line_intervals(b.outer, p0, u)
+            inner = G.region_line_intervals(b.inner, p0, u)
+            out += G.subtract_intervals(outer, inner)
+        return sorted(out)
+
+    def extent_at(self, z, axis):
+        """Projected width of the building at height z, along a screen axis."""
+        lo = hi = None
+        for b in self.bands_at(z):
+            for ring in b.outer.rings:
+                for (x, y) in ring:
+                    s = x * axis[0] + y * axis[1]
+                    lo = s if lo is None else min(lo, s)
+                    hi = s if hi is None else max(hi, s)
+        return (lo, hi)
+
+    def section(self, p0, direction, steps=200, z0=0.0, z1=None):
+        """Vertical cut, built by sampling the solid rather than slicing a mesh.
+
+        Sampling works for every typology: straight walls come out as clean
+        rectangles and a swept profile comes out as its true curve, without the
+        section code needing to know which it is looking at."""
         dx, dy = direction
         l = math.hypot(dx, dy) or 1.0
-        ux, uy = dx / l, dy / l
-        normal = (-uy, ux, 0.0)
+        u = (dx / l, dy / l)
+        z1 = self.height if z1 is None else z1
         res = SectionResult()
 
-        segs = self.mesh().slice_plane((p0[0], p0[1], 0.0), normal)
-        flat = []
-        for (a, b) in segs:
-            ua = (a[0] - p0[0]) * ux + (a[1] - p0[1]) * uy
-            ub = (b[0] - p0[0]) * ux + (b[1] - p0[1]) * uy
-            flat.append(((ua, a[2]), (ub, b[2])))
-        res.cut = G.chain_segments(flat, tol=1e-4)
+        samples = []
+        for i in range(steps + 1):
+            z = z0 + (z1 - z0) * i / steps
+            samples.append((z, self.solid_intervals(z, p0, u)))
+
+        # group runs where the number of material intervals is stable, then
+        # trace each one up its left edge and back down its right
+        run = []
+        for (z, ivs) in samples:
+            if run and len(ivs) != len(run[-1][1]):
+                res.cut += _trace(run)
+                run = []
+            run.append((z, ivs))
+        res.cut += _trace(run)
 
         for lv in self.levels:
-            for (t0, t1) in G.region_line_intervals(lv.plate, p0, (ux, uy)):
+            for (t0, t1) in G.region_line_intervals(lv.plate, p0, u):
                 res.slabs.append((t0, t1, lv.ffl, lv.slab_t))
             res.levels.append((lv.name, lv.ffl))
+
+        axis = u
+        for i in range(steps + 1):
+            z = z0 + (z1 - z0) * i / steps
+            lo, hi = self.extent_at(z, axis)
+            if lo is not None:
+                res.beyond.append((z, lo, hi))
         return res
 
-    def silhouette(self, azimuth):
-        """Orthographic elevation seen from plan angle `azimuth` (degrees)."""
+    def silhouette(self, azimuth, steps=200, z0=0.0, z1=None):
+        """Orthographic elevation: the projected extent of the solid at every
+        height, which is exactly the outline however the building is shaped."""
         a = math.radians(azimuth)
-        view = (math.cos(a), math.sin(a), 0.0)      # from the viewer toward the model
-        right = (-math.sin(a), math.cos(a), 0.0)
+        right = (-math.sin(a), math.cos(a))
+        z1 = self.height if z1 is None else z1
         el = Elevation2D()
-        segs = []
-        for (p, q) in self.mesh().silhouette_edges(view):
-            segs.append(((p[0] * right[0] + p[1] * right[1], p[2]),
-                         (q[0] * right[0] + q[1] * right[1], q[2])))
-        el.outline = G.chain_segments(segs, tol=1e-4)
+        left, rightside = [], []
+        for i in range(steps + 1):
+            z = z0 + (z1 - z0) * i / steps
+            lo, hi = self.extent_at(z, right)
+            if lo is None:
+                continue
+            left.append((lo, z))
+            rightside.append((hi, z))
+        el.outline = [(left + rightside[::-1], True)] if left else []
         for z in self.joint_heights():
-            hz = []
-            for (a2, b2) in self.mesh().slice_horizontal(z):
-                if (a2[0] * view[0] + a2[1] * view[1]) > -1e9:
-                    hz.append(((a2[0] * right[0] + a2[1] * right[1], z),
-                               (b2[0] * right[0] + b2[1] * right[1], z)))
-            el.joints.append((z, G.chain_segments(hz, tol=1e-4)))
+            lo, hi = self.extent_at(max(z - 1e-4, 0.0), right)
+            if lo is not None:
+                el.joints.append((z, [([(lo, z), (hi, z)], False)]))
         return el
 
     def joint_heights(self):
@@ -351,17 +411,3 @@ class Revolve(Massing):
                        (r1 * math.cos(a1), r1 * math.sin(a1), z1),
                        (r1 * math.cos(a0), r1 * math.sin(a0), z1), "shell")
         return m
-
-    def section(self, p0, direction, half_width=None):
-        """Exact: a plane through the axis cuts the profile and its mirror."""
-        res = SectionResult()
-        prof = self.profile
-        res.cut = [([(r, z) for (r, z) in prof], True),
-                   ([(-r, z) for (r, z) in prof], True)]
-        dx, dy = direction
-        l = math.hypot(dx, dy) or 1.0
-        for lv in self.levels:
-            for (t0, t1) in G.region_line_intervals(lv.plate, p0, (dx / l, dy / l)):
-                res.slabs.append((t0, t1, lv.ffl, lv.slab_t))
-            res.levels.append((lv.name, lv.ffl))
-        return res

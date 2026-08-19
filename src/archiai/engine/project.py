@@ -31,14 +31,28 @@ class Project:
     def rooms(self):
         return [r for fp in self.floorplans for r in fp.rooms]
 
-    def build(self, out_dir):
+    def default_cuts(self):
+        from . import geom2d as G
+        c = G.centroid(self.massing.footprint().outer)
+        return [("A", c, (1.0, 0.0), "Cut east-west through the plan centre"),
+                ("B", c, (0.0, 1.0), "Cut north-south through the plan centre")]
+
+    def build(self, out_dir, elevations=(270, 0, 90, 180)):
         from . import draw
-        os.makedirs(os.path.join(out_dir, "drawings"), exist_ok=True)
+        d = os.path.join(out_dir, "drawings")
+        os.makedirs(d, exist_ok=True)
+        num = self.info["number"]
         made = []
         for i in range(len(self.massing.levels)):
-            path = os.path.join(out_dir, "drawings", "%s-A-1%02d.svg"
-                                % (self.info["number"], i))
-            made.append(draw.plan_sheet(self, i, path))
+            made.append(draw.plan_sheet(self, i, os.path.join(d, "%s-A-1%02d.svg" % (num, i))))
+        made.append(draw.elevation_sheet(
+            self, list(elevations[:2]), os.path.join(d, "%s-A-200.svg" % num), number="A-200"))
+        if len(elevations) > 2:
+            made.append(draw.elevation_sheet(
+                self, list(elevations[2:]), os.path.join(d, "%s-A-201.svg" % num),
+                number="A-201"))
+        made.append(draw.section_sheet(
+            self, self.default_cuts(), os.path.join(d, "%s-A-300.svg" % num)))
         return made
 
     def __repr__(self):

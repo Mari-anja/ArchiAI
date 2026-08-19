@@ -344,3 +344,23 @@ def region_line_intervals(region, p0, d):
         if ts[i + 1] - ts[i] > 1e-9:
             out.append((ts[i], ts[i + 1]))
     return out
+
+
+def subtract_intervals(a, b):
+    """a minus b, both lists of (t0, t1)."""
+    out = []
+    for (s, e) in a:
+        pieces = [(s, e)]
+        for (bs, be) in b:
+            nxt = []
+            for (ps, pe) in pieces:
+                if be <= ps or bs >= pe:
+                    nxt.append((ps, pe))
+                    continue
+                if bs > ps:
+                    nxt.append((ps, bs))
+                if be < pe:
+                    nxt.append((be, pe))
+            pieces = nxt
+        out += [(s2, e2) for (s2, e2) in pieces if e2 - s2 > 1e-9]
+    return out
