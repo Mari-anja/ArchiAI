@@ -1,0 +1,446 @@
+<title>Torus Office</title>
+<style>
+  :root{
+    --bg:#f4f4f2; --panel:#ffffff; --ink:#15171a; --muted:#6b7076;
+    --line:#e0e0dc; --accent:#1c5fa8; --shadow:0 1px 3px rgba(0,0,0,.07),0 8px 28px rgba(0,0,0,.06);
+  }
+  :root:not([data-theme="light"]){}
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#131519; --panel:#1b1e23; --ink:#e8eaec; --muted:#969ba2;
+      --line:#2b2f36; --accent:#6fa8e8; --shadow:0 1px 3px rgba(0,0,0,.4),0 8px 28px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#131519; --panel:#1b1e23; --ink:#e8eaec; --muted:#969ba2;
+    --line:#2b2f36; --accent:#6fa8e8; --shadow:0 1px 3px rgba(0,0,0,.4),0 8px 28px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 "Helvetica Neue",Helvetica,Arial,sans-serif;overflow:hidden}
+  #stage{position:fixed;inset:0}
+  canvas{display:block;width:100%;height:100%;cursor:grab;touch-action:none}
+  canvas.dragging{cursor:grabbing}
+  .card{position:fixed;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;box-shadow:var(--shadow)}
+  #hud{top:16px;left:16px;padding:14px 16px;max-width:280px}
+  #hud h1{margin:0;font-size:20px;letter-spacing:.16em;font-weight:700}
+  #hud .sub{color:var(--muted);font-size:12px;margin-top:2px}
+  #hud dl{margin:12px 0 0;display:grid;grid-template-columns:1fr auto;gap:3px 12px;font-size:12px}
+  #hud dt{color:var(--muted)}
+  #hud dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
+  #panel{top:16px;right:16px;padding:14px 16px;width:238px;max-height:calc(100vh - 32px);overflow:auto}
+  #panel h2{margin:0 0 8px;font-size:10px;letter-spacing:.16em;color:var(--muted);
+    font-weight:700;text-transform:uppercase}
+  #panel h2:not(:first-child){margin-top:16px}
+  label.row{display:flex;align-items:center;gap:8px;font-size:12.5px;padding:2px 0;cursor:pointer}
+  label.row input{accent-color:var(--accent);cursor:pointer}
+  .sw{width:11px;height:11px;border-radius:2px;border:1px solid rgba(0,0,0,.18);flex:0 0 auto}
+  input[type=range]{width:100%;accent-color:var(--accent);margin:4px 0 0}
+  .val{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+  button{font:inherit;font-size:11.5px;padding:5px 9px;border-radius:6px;cursor:pointer;
+    border:1px solid var(--line);background:transparent;color:var(--ink)}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  #tip{position:fixed;bottom:16px;left:16px;font-size:11.5px;color:var(--muted)}
+  @media (max-width:820px){
+    #hud{max-width:none;left:12px;right:12px;top:12px}
+    #hud dl{grid-template-columns:1fr auto 1fr auto}
+    #panel{right:12px;left:12px;top:auto;bottom:12px;width:auto;max-height:44vh}
+    #tip{display:none}
+  }
+</style>
+
+<div id="stage"><canvas id="c"></canvas></div>
+
+<div class="card" id="hud">
+  <h1>TORUS</h1>
+  <div class="sub">Two-storey office pavilion · AAI-2601</div>
+  <dl>
+    <dt>Overall diameter</dt><dd>75.0 m</dd>
+    <dt>Courtyard</dt><dd>45.0 m</dd>
+    <dt>Height to apex</dt><dd>9.6 m</dd>
+    <dt>Floor plate depth</dt><dd>14.4 m</dd>
+    <dt>Gross internal area</dt><dd id="m-gia">—</dd>
+    <dt>Triangles</dt><dd id="m-tri">—</dd>
+  </dl>
+</div>
+
+<div class="card" id="panel">
+  <h2>Layers</h2>
+  <div id="layers"></div>
+  <h2>Cutaway</h2>
+  <input type="range" id="cut" min="0" max="180" value="0" step="1">
+  <div class="val"><span id="cutv">0°</span> of the ring removed</div>
+  <h2>Sun</h2>
+  <input type="range" id="sun" min="0" max="360" value="215" step="1">
+  <div class="val">azimuth <span id="sunv">215°</span></div>
+  <h2>View</h2>
+  <div class="btns">
+    <button data-view="axo">Axonometric</button>
+    <button data-view="top">Plan</button>
+    <button data-view="south">South</button>
+    <button data-view="east">East</button>
+    <button data-view="eye">Eye level</button>
+    <button data-view="court">Courtyard</button>
+  </div>
+  <h2>Motion</h2>
+  <div class="btns"><button id="spin">Orbit: off</button></div>
+</div>
+
+<div id="tip">Drag to orbit · scroll to zoom · shift-drag to pan</div>
+
+<script>
+"use strict";
+/* ------------------------------------------------------------------ *
+ *  Parameters -- injected from the same Python module that draws the
+ *  sheets, so the model here is the model on the drawings.
+ * ------------------------------------------------------------------ */
+const P = __PARAMS__;
+
+/* ---------------- small matrix helpers ---------------------------- */
+const M4 = {
+  ident: () => new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]),
+  mul(a,b){ const o=new Float32Array(16);
+    for(let i=0;i<4;i++)for(let j=0;j<4;j++){let s=0;
+      for(let k=0;k<4;k++) s+=a[k*4+j]*b[i*4+k]; o[i*4+j]=s;} return o; },
+  persp(fov,asp,n,f){ const t=1/Math.tan(fov/2); return new Float32Array(
+    [t/asp,0,0,0, 0,t,0,0, 0,0,(f+n)/(n-f),-1, 0,0,2*f*n/(n-f),0]); },
+  ortho(w,h,n,f){ return new Float32Array(
+    [2/w,0,0,0, 0,2/h,0,0, 0,0,-2/(f-n),0, 0,0,-(f+n)/(f-n),1]); },
+  look(e,c,u){
+    let z=norm(sub(e,c)), x=norm(cross(u,z)), y=cross(z,x);
+    return new Float32Array([x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0,
+      -dot(x,e),-dot(y,e),-dot(z,e),1]); }
+};
+const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const norm=a=>{const m=Math.hypot(...a)||1;return [a[0]/m,a[1]/m,a[2]/m];};
+const rad=d=>d*Math.PI/180;
+
+/* ---------------- geometry builders ------------------------------- */
+class Buf {
+  constructor(){ this.p=[]; this.n=[]; this.i=[]; }
+  get count(){ return this.i.length; }
+  vert(p,n){ this.p.push(p[0],p[1],p[2]); this.n.push(n[0],n[1],n[2]);
+    return this.p.length/3-1; }
+  quad(a,b,c,d){ this.i.push(a,b,c, a,c,d); }
+  addQuad(pts,ns){ const k=pts.map((p,j)=>this.vert(p,ns[j]||ns[0]));
+    this.quad(k[0],k[1],k[2],k[3]); }
+}
+
+function surf(t,phi,r){
+  const tr=rad(t), pr=rad(phi), rho=P.R + r*Math.cos(pr);
+  return [rho*Math.cos(tr), rho*Math.sin(tr), P.zc + r*Math.sin(pr)];
+}
+function snorm(t,phi,out){
+  const tr=rad(t), pr=rad(phi);
+  const n=[Math.cos(pr)*Math.cos(tr), Math.cos(pr)*Math.sin(tr), Math.sin(pr)];
+  return out? n : [-n[0],-n[1],-n[2]];
+}
+
+function shellBand(b,p0,p1,tStep,pStep,r,outward){
+  for(let phi=p0; phi<p1-1e-9; phi+=pStep){
+    const pa=phi, pb=Math.min(phi+pStep,p1);
+    for(let t=0;t<360;t+=tStep){
+      const ta=t, tb=t+tStep;
+      const q=[[ta,pa],[tb,pa],[tb,pb],[ta,pb]];
+      const pts=q.map(([u,v])=>surf(u,v,r));
+      const ns =q.map(([u,v])=>snorm(u,v,outward));
+      if(!outward){ pts.reverse(); ns.reverse(); }
+      b.addQuad(pts,ns);
+    }
+  }
+}
+
+function ring(b,z,thick,r0,r1,t0,t1,step){
+  const n=Math.max(1,Math.round((t1-t0)/step));
+  for(let i=0;i<n;i++){
+    const ta=rad(t0+(t1-t0)*i/n), tb=rad(t0+(t1-t0)*(i+1)/n);
+    const ca=Math.cos(ta),sa=Math.sin(ta),cb=Math.cos(tb),sb=Math.sin(tb);
+    const A=[r0*ca,r0*sa,z],B=[r1*ca,r1*sa,z],C=[r1*cb,r1*sb,z],D=[r0*cb,r0*sb,z];
+    b.addQuad([A,B,C,D],[[0,0,1]]);
+    const zb=z-thick;
+    const A2=[A[0],A[1],zb],B2=[B[0],B[1],zb],C2=[C[0],C[1],zb],D2=[D[0],D[1],zb];
+    b.addQuad([D2,C2,B2,A2],[[0,0,-1]]);
+    b.addQuad([B,C,C2,B2],[[cb,sb,0]]);
+    b.addQuad([D,A,A2,D2],[[-ca,-sa,0]]);
+  }
+}
+
+function disc(b,z,r0,r1,step){
+  for(let t=0;t<360;t+=step){
+    const ta=rad(t),tb=rad(t+step);
+    b.addQuad([[r0*Math.cos(ta),r0*Math.sin(ta),z],[r1*Math.cos(ta),r1*Math.sin(ta),z],
+               [r1*Math.cos(tb),r1*Math.sin(tb),z],[r0*Math.cos(tb),r0*Math.sin(tb),z]],
+              [[0,0,1]]);
+  }
+}
+
+function tube(b,cx,cy,z0,z1,r,sides){
+  for(let i=0;i<sides;i++){
+    const a=2*Math.PI*i/sides, c=2*Math.PI*(i+1)/sides;
+    const na=[Math.cos(a),Math.sin(a),0], nc=[Math.cos(c),Math.sin(c),0];
+    b.addQuad([[cx+r*na[0],cy+r*na[1],z0],[cx+r*nc[0],cy+r*nc[1],z0],
+               [cx+r*nc[0],cy+r*nc[1],z1],[cx+r*na[0],cy+r*na[1],z1]],[na,nc,nc,na]);
+  }
+}
+
+function box(b,pts,z0,z1){
+  for(let i=0;i<pts.length;i++){
+    const a=pts[i], c=pts[(i+1)%pts.length];
+    const n=norm([c[1]-a[1], -(c[0]-a[0]), 0]);
+    b.addQuad([[a[0],a[1],z0],[c[0],c[1],z0],[c[0],c[1],z1],[a[0],a[1],z1]],[n]);
+  }
+  b.addQuad(pts.map(p=>[p[0],p[1],z1]),[[0,0,1]]);
+}
+
+/* ---------------- the building ------------------------------------ */
+const LAYERS = [];
+function layer(id,label,color,opacity,build,on=true,cut=true){
+  const b=new Buf(); build(b);
+  LAYERS.push({id,label,color,opacity,b,on,cut,gl:null});
+}
+
+const TS=2.5, PS=4;
+layer("site","Site","#cdd3c4",1,b=>disc(b,-0.06,0,P.siteR,6),true,false);
+layer("court","Courtyard","#9fbb92",1,b=>{disc(b,0,7.4,P.rIn,6); disc(b,0.04,0,7.2,6);},true,false);
+layer("slab0","Level 00 plate","#cfc9c0",1,b=>ring(b,0,0.35,P.rIn,P.rOut,0,360,TS));
+layer("slab1","Level 01 plate","#cfc9c0",1,b=>{
+  ring(b,P.ffl1,P.slabT,P.rIn,P.rOut,0,P.void0,TS);
+  ring(b,P.ffl1,P.slabT,P.rIn,P.rOut,P.void1,360,TS);
+  ring(b,P.ffl1,P.slabT,P.rIn,P.rLoop,P.void0,P.void1,TS);
+});
+layer("cores","Cores","#a9a9a4",1,b=>{
+  P.cores.forEach(([t,h])=>{
+    const pts=[];
+    for(let a=t-h;a<=t+h+1e-9;a+=2*h/6) pts.push([P.coreR0*Math.cos(rad(a)),P.coreR0*Math.sin(rad(a))]);
+    for(let a=t+h;a>=t-h-1e-9;a-=2*h/6) pts.push([P.core3dR1*Math.cos(rad(a)),P.core3dR1*Math.sin(rad(a))]);
+    box(b,pts,0,P.core3dZ);
+  });
+});
+layer("frame","Columns and ribs","#7d858e",1,b=>{
+  for(let i=0;i<P.nRadial;i++){
+    const a=rad(i*360/P.nRadial);
+    P.colR.forEach(r=>{
+      tube(b,r*Math.cos(a),r*Math.sin(a),0,P.ffl1-P.slabT,P.colD/2,10);
+      tube(b,r*Math.cos(a),r*Math.sin(a),P.ffl1,P.ffl1+3.6,P.colD/2,10);
+    });
+  }
+  const rr=P.r-P.shellT-P.ribD/2;
+  for(let i=0;i<P.nRadial;i++){
+    const t=i*360/P.nRadial, n=54;
+    for(let k=0;k<n;k++){
+      const pa=P.phi0+(P.phi1-P.phi0)*k/n, pb=P.phi0+(P.phi1-P.phi0)*(k+1)/n;
+      const w=P.ribD/2, tr=rad(t), ox=-Math.sin(tr)*w, oy=Math.cos(tr)*w;
+      const A=surf(t,pa,rr), B=surf(t,pb,rr);
+      const nrm=snorm(t,(pa+pb)/2,false);
+      b.addQuad([[A[0]-ox,A[1]-oy,A[2]],[B[0]-ox,B[1]-oy,B[2]],
+                 [B[0]+ox,B[1]+oy,B[2]],[A[0]+ox,A[1]+oy,A[2]]],[nrm]);
+    }
+  }
+});
+layer("desks","Desks","#a99b84",1,b=>{
+  P.desks.forEach(d=>{
+    const z=d[0]?P.ffl1:0;
+    const pts=[[d[1],d[2]],[d[3],d[4]],[d[5],d[6]],[d[7],d[8]]];
+    b.addQuad(pts.map(p=>[p[0],p[1],z+0.74]),[[0,0,1]]);
+  });
+});
+layer("lining","Shell lining","#b8bcb8",1,
+  b=>shellBand(b,P.phi0,P.phi1,TS,PS,P.r-P.shellT,false));
+layer("crown","Crown","#b7bab6",1,b=>{
+  shellBand(b,62,64,TS,2,P.r,true);
+  shellBand(b,88,118,TS,PS,P.r,true);
+});
+layer("pv","Photovoltaic","#2b333d",1,b=>shellBand(b,64,88,TS,PS,P.r,true));
+layer("glass","Curved glazing","#8fb0c8",0.42,b=>{
+  shellBand(b,P.phi0,62,TS,PS,P.r,true);
+  shellBand(b,118,P.phi1,TS,PS,P.r,true);
+});
+
+/* ---------------- GL ---------------------------------------------- */
+const cv=document.getElementById("c");
+const gl=cv.getContext("webgl",{antialias:true,alpha:false});
+if(!gl){ document.getElementById("tip").textContent="WebGL is not available in this browser."; }
+
+const VS=`
+attribute vec3 aPos; attribute vec3 aNorm;
+uniform mat4 uProj, uView;
+varying vec3 vN, vW;
+void main(){ vN=aNorm; vW=aPos; gl_Position=uProj*uView*vec4(aPos,1.0); }`;
+const FS=`
+precision mediump float;
+varying vec3 vN, vW;
+uniform vec3 uColor, uSun, uEye;
+uniform float uAlpha, uCut0, uCut1, uCutOn;
+void main(){
+  if(uCutOn>0.5){
+    float a=degrees(atan(vW.y,vW.x)); if(a<0.0) a+=360.0;
+    bool inside = (uCut0<uCut1) ? (a>uCut0 && a<uCut1)
+                                : (a>uCut0 || a<uCut1);
+    if(inside && length(vW.xy)>1.0) discard;
+  }
+  vec3 n=normalize(vN);
+  if(!gl_FrontFacing) n=-n;
+  float key=max(dot(n,normalize(uSun)),0.0);
+  float fill=max(dot(n,normalize(vec3(-uSun.x,-uSun.y,0.30))),0.0)*0.17;
+  float sky=0.26+0.14*(n.z*0.5+0.5);
+  vec3 col=uColor*min(sky+key*0.55+fill,1.06);
+  vec3 v=normalize(uEye-vW);
+  float spec=pow(max(dot(reflect(-normalize(uSun),n),v),0.0),24.0);
+  col+=vec3(spec*0.13);
+  float a=uAlpha;
+  if(uAlpha<0.99){ a=mix(uAlpha,0.92,pow(1.0-max(dot(n,v),0.0),3.0)); }
+  gl_FragColor=vec4(col,a);
+}`;
+
+function shader(type,src){ const s=gl.createShader(type); gl.shaderSource(s,src);
+  gl.compileShader(s); if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))
+    console.error(gl.getShaderInfoLog(s)); return s; }
+const prog=gl.createProgram();
+gl.attachShader(prog,shader(gl.VERTEX_SHADER,VS));
+gl.attachShader(prog,shader(gl.FRAGMENT_SHADER,FS));
+gl.bindAttribLocation(prog,0,"aPos"); gl.bindAttribLocation(prog,1,"aNorm");
+gl.linkProgram(prog); gl.useProgram(prog);
+const U=n=>gl.getUniformLocation(prog,n);
+const uProj=U("uProj"),uView=U("uView"),uColor=U("uColor"),uAlpha=U("uAlpha"),
+      uSun=U("uSun"),uEye=U("uEye"),uCut0=U("uCut0"),uCut1=U("uCut1"),uCutOn=U("uCutOn");
+
+let tris=0;
+const ext=gl.getExtension("OES_element_index_uint");
+LAYERS.forEach(L=>{
+  const pos=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,pos);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(L.b.p),gl.STATIC_DRAW);
+  const nrm=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,nrm);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(L.b.n),gl.STATIC_DRAW);
+  const idx=gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,idx);
+  const big = L.b.p.length/3 > 65535;
+  const arr = (big&&ext)? new Uint32Array(L.b.i) : new Uint16Array(L.b.i);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,arr,gl.STATIC_DRAW);
+  L.gl={pos,nrm,idx,n:L.b.i.length,type:(big&&ext)?gl.UNSIGNED_INT:gl.UNSIGNED_SHORT};
+  tris+=L.b.i.length/3;
+  const c=L.color; L.rgb=[parseInt(c.substr(1,2),16)/255,
+    parseInt(c.substr(3,2),16)/255, parseInt(c.substr(5,2),16)/255];
+  L.b=null;
+});
+document.getElementById("m-tri").textContent=tris.toLocaleString();
+document.getElementById("m-gia").textContent=P.gia.toLocaleString()+" m²";
+
+/* ---------------- camera ------------------------------------------ */
+const cam={az:-122,el:26,dist:150,tx:0,ty:0,tz:3,ortho:false};
+const VIEWS={
+  axo:{az:-122,el:26,dist:150,tz:3,ortho:false},
+  top:{az:-90,el:89.9,dist:145,tz:3,ortho:true},
+  south:{az:-90,el:2,dist:190,tz:5,ortho:true},
+  east:{az:0,el:2,dist:190,tz:5,ortho:true},
+  eye:{az:-118,el:4,dist:66,tz:1.7,ortho:false},
+  court:{az:-40,el:8,dist:26,tz:1.7,ortho:false}
+};
+let target={...cam}, spinning=false;
+
+function apply(v){ target={...target,...v}; }
+document.querySelectorAll("[data-view]").forEach(btn=>
+  btn.onclick=()=>apply(VIEWS[btn.dataset.view]));
+
+let drag=null;
+cv.addEventListener("pointerdown",e=>{ drag={x:e.clientX,y:e.clientY,pan:e.shiftKey};
+  cv.setPointerCapture(e.pointerId); cv.classList.add("dragging"); });
+cv.addEventListener("pointerup",e=>{ drag=null; cv.classList.remove("dragging"); });
+cv.addEventListener("pointermove",e=>{
+  if(!drag) return;
+  const dx=e.clientX-drag.x, dy=e.clientY-drag.y;
+  drag.x=e.clientX; drag.y=e.clientY;
+  if(drag.pan){ const k=cam.dist*0.0016;
+    const a=rad(cam.az);
+    target.tx-=(-Math.sin(a)*dx)*k; target.ty-=(Math.cos(a)*dx)*k; target.tz+=dy*k;
+  } else { target.az-=dx*0.32; target.el=Math.max(-8,Math.min(89.9,target.el+dy*0.28)); }
+});
+cv.addEventListener("wheel",e=>{ e.preventDefault();
+  target.dist=Math.max(14,Math.min(420,target.dist*(1+Math.sign(e.deltaY)*0.09)));
+},{passive:false});
+document.getElementById("spin").onclick=e=>{ spinning=!spinning;
+  e.target.textContent="Orbit: "+(spinning?"on":"off"); };
+
+/* ---------------- UI ---------------------------------------------- */
+const box_=document.getElementById("layers");
+LAYERS.forEach(L=>{
+  const l=document.createElement("label"); l.className="row";
+  l.innerHTML='<input type="checkbox"'+(L.on?" checked":"")+
+    '><span class="sw" style="background:'+L.color+'"></span><span>'+L.label+'</span>';
+  l.querySelector("input").onchange=e=>{L.on=e.target.checked;};
+  box_.appendChild(l);
+});
+let cutSpan=0, sunAz=215;
+const cutEl=document.getElementById("cut"), cutV=document.getElementById("cutv");
+cutEl.oninput=()=>{ cutSpan=+cutEl.value; cutV.textContent=cutSpan+"°"; };
+const sunEl=document.getElementById("sun"), sunV=document.getElementById("sunv");
+sunEl.oninput=()=>{ sunAz=+sunEl.value; sunV.textContent=sunAz+"°"; };
+
+/* ---------------- draw -------------------------------------------- */
+function resize(){
+  const d=Math.min(window.devicePixelRatio||1,2);
+  const w=Math.round(cv.clientWidth*d), h=Math.round(cv.clientHeight*d);
+  if(cv.width!==w||cv.height!==h){ cv.width=w; cv.height=h; }
+}
+function bg(){
+  const dark=matchMedia("(prefers-color-scheme: dark)").matches &&
+    document.documentElement.getAttribute("data-theme")!=="light" ||
+    document.documentElement.getAttribute("data-theme")==="dark";
+  return dark?[0.075,0.082,0.098]:[0.957,0.957,0.949];
+}
+function frame(){
+  resize();
+  if(spinning) target.az-=0.14;
+  for(const k of ["az","el","dist","tx","ty","tz"])
+    cam[k]+=(target[k]-cam[k])*0.14;
+  cam.ortho=target.ortho;
+
+  const a=rad(cam.az), e=rad(cam.el);
+  const eye=[cam.tx+cam.dist*Math.cos(a)*Math.cos(e),
+             cam.ty+cam.dist*Math.sin(a)*Math.cos(e),
+             cam.tz+cam.dist*Math.sin(e)];
+  const ctr=[cam.tx,cam.ty,cam.tz];
+  const asp=cv.width/cv.height;
+  const proj = cam.ortho
+      ? M4.ortho(cam.dist*0.86*asp, cam.dist*0.86, 1, 2000)
+      : M4.persp(rad(36), asp, 0.6, 2000);
+  const view = M4.look(eye,ctr,[0,0,1]);
+
+  const c=bg();
+  gl.viewport(0,0,cv.width,cv.height);
+  gl.clearColor(c[0],c[1],c[2],1);
+  gl.enable(gl.DEPTH_TEST);
+  gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  gl.useProgram(prog);
+  gl.uniformMatrix4fv(uProj,false,proj);
+  gl.uniformMatrix4fv(uView,false,view);
+  const sa=rad(sunAz);
+  gl.uniform3f(uSun,Math.cos(sa)*0.62,Math.sin(sa)*0.62,0.68);
+  gl.uniform3f(uEye,eye[0],eye[1],eye[2]);
+  gl.uniform1f(uCut0,(270-cutSpan/2+360)%360);
+  gl.uniform1f(uCut1,(270+cutSpan/2)%360);
+
+  const draw=L=>{
+    if(!L.on) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER,L.gl.pos);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
+    gl.bindBuffer(gl.ARRAY_BUFFER,L.gl.nrm);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1,3,gl.FLOAT,false,0,0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,L.gl.idx);
+    gl.uniform3fv(uColor,L.rgb); gl.uniform1f(uAlpha,L.opacity);
+    gl.uniform1f(uCutOn,(cutSpan>0.5 && L.cut)?1.0:0.0);
+    gl.drawElements(gl.TRIANGLES,L.gl.n,L.gl.type,0);
+  };
+  gl.disable(gl.BLEND); gl.depthMask(true); gl.disable(gl.CULL_FACE);
+  LAYERS.filter(L=>L.opacity>0.99).forEach(draw);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+  gl.depthMask(false);
+  LAYERS.filter(L=>L.opacity<=0.99).forEach(draw);
+  gl.depthMask(true);
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
