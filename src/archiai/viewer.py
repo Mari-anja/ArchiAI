@@ -26,7 +26,7 @@ def params():
         "R": P.MAJOR_R, "r": P.TUBE_R, "zc": P.TUBE_Z, "shellT": P.ENV_T,
         "ffl1": P.FFL_01, "slabT": P.SLAB_T,
         "rIn": P.R_IN_00, "rOut": P.R_OUT_00, "rLoop": P.R_LOOP,
-        "siteR": round(P.SITE_R * 0.6, 3),
+        "siteR": round(P.SITE_R * 0.44, 3),
         "nRadial": P.RADIAL_DIV, "colR": P.COL_RADII,
         "colD": P.COL_DIA, "ribD": P.RIB_DIA,
         "phi0": round(P.PHI_SPRING_OUT, 4), "phi1": round(P.PHI_SPRING_IN, 4),

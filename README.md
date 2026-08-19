@@ -89,6 +89,7 @@ actually needs:
 | `output/model/viewer.html` | Open in any browser. Orbit, cutaway slider, layer toggles, six view presets. Self-contained — no network, no libraries. |
 | `output/model/torus-office.obj` | 25 182 faces in 17 named groups, metres. Opens in Blender, Rhino, SketchUp, MeshLab. |
 | `output/model/torus-office.scad` | Parametric OpenSCAD. Change `R`, `r` or `zc` and re-render; a cutaway toggle is built in. |
+| `output/web/index.html` | The whole project in one file: the live model, the geometry, and all 14 sheets with a zoomable viewer. |
 
 The viewer, the mesh and the drawings are generated from the same geometry
 functions, so they cannot drift apart.

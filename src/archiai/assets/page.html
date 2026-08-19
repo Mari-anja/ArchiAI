@@ -1,0 +1,476 @@
+<title>Torus Office Pavilion</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+/* ---- tokens: complete light palette on bare :root ------------------- */
+:root{
+  --paper:#faf9f6;      --panel:#ffffff;      --sunk:#f2f1ec;
+  --ink:#14161a;        --graphite:#5b626c;   --faint:#8c929a;
+  --rule:#e3e2dc;       --rule-soft:#eeede8;
+  --accent:#1c5fa8;     --accent-soft:#e8eff7;
+  --mark:#b3261e;
+  --shadow:0 1px 2px rgba(20,22,26,.05), 0 10px 34px rgba(20,22,26,.07);
+  --shadow-lift:0 2px 6px rgba(20,22,26,.08), 0 22px 60px rgba(20,22,26,.12);
+  --sans:'Archivo',"Helvetica Neue",Helvetica,Arial,sans-serif;
+  --serif:'Source Serif 4',Georgia,'Times New Roman',serif;
+  --mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#101216;    --panel:#171a1f;      --sunk:#1c2027;
+    --ink:#e7e9ec;      --graphite:#a2a9b2;   --faint:#767d87;
+    --rule:#282c33;     --rule-soft:#20242a;
+    --accent:#6fa8e8;   --accent-soft:#1a2a3c;
+    --mark:#e08279;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 34px rgba(0,0,0,.34);
+    --shadow-lift:0 2px 6px rgba(0,0,0,.45), 0 22px 60px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#101216;      --panel:#171a1f;      --sunk:#1c2027;
+  --ink:#e7e9ec;        --graphite:#a2a9b2;   --faint:#767d87;
+  --rule:#282c33;       --rule-soft:#20242a;
+  --accent:#6fa8e8;     --accent-soft:#1a2a3c;
+  --mark:#e08279;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 34px rgba(0,0,0,.34);
+  --shadow-lift:0 2px 6px rgba(0,0,0,.45), 0 22px 60px rgba(0,0,0,.5);
+}
+
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);
+  font-family:var(--serif);font-size:17px;line-height:1.62;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+h1,h2,h3,h4{font-family:var(--sans);font-weight:600;text-wrap:balance;
+  line-height:1.14;margin:0}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:3px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+.wrap{max-width:1180px;margin:0 auto;padding:0 32px}
+.lede{max-width:66ch}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--faint);margin:0 0 14px}
+.num{font-variant-numeric:tabular-nums;font-family:var(--mono)}
+
+/* ---- masthead -------------------------------------------------------- */
+header.bar{position:sticky;top:0;z-index:40;background:color-mix(in srgb,var(--paper) 88%,transparent);
+  backdrop-filter:blur(12px);border-bottom:1px solid var(--rule)}
+.bar .wrap{display:flex;align-items:center;gap:24px;height:58px}
+.brand{font-family:var(--sans);font-weight:700;letter-spacing:.34em;font-size:15px}
+.brand span{color:var(--accent)}
+.bar .no{font-family:var(--mono);font-size:11.5px;color:var(--faint);letter-spacing:.06em}
+.bar nav{margin-left:auto;display:flex;gap:22px}
+.bar nav a{font-family:var(--sans);font-size:13px;color:var(--graphite);
+  text-decoration:none;letter-spacing:.01em}
+.bar nav a:hover{color:var(--accent)}
+@media(max-width:760px){.bar nav{display:none}}
+
+/* ---- hero ------------------------------------------------------------ */
+.hero{position:relative;height:min(78vh,720px);min-height:440px;
+  background:var(--sunk);border-bottom:1px solid var(--rule);overflow:hidden}
+#c{display:block;width:100%;height:100%;cursor:grab;touch-action:none}
+#c.dragging{cursor:grabbing}
+.hero-title{position:absolute;left:0;right:0;top:34px;pointer-events:none}
+.hero-title .wrap{display:flex;flex-direction:column;gap:6px}
+.hero-title h1{font-size:clamp(38px,6.6vw,82px);letter-spacing:.14em;font-weight:700}
+.hero-title p{margin:0;font-family:var(--sans);font-size:clamp(13px,1.5vw,17px);
+  color:var(--graphite);letter-spacing:.02em}
+
+/* ---- model control strip --------------------------------------------- */
+.controls{position:absolute;left:0;right:0;bottom:0;padding:0 0 20px}
+.controls .wrap{display:flex;gap:9px;align-items:flex-end;overflow-x:auto;
+  padding-bottom:4px;scrollbar-width:thin}
+.cgroup{background:color-mix(in srgb,var(--panel) 90%,transparent);
+  border:1px solid var(--rule);border-radius:9px;padding:8px 11px;
+  box-shadow:var(--shadow);backdrop-filter:blur(10px);flex:0 0 auto}
+.cgroup h4{font-family:var(--mono);font-size:9.5px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--faint);font-weight:500;margin:0 0 7px}
+.btns{display:flex;flex-wrap:wrap;gap:5px}
+button{font:500 11.5px/1 var(--sans);padding:6px 9px;border-radius:6px;cursor:pointer;
+  border:1px solid var(--rule);background:transparent;color:var(--ink);
+  transition:border-color .15s,color .15s}
+button:hover{border-color:var(--accent);color:var(--accent)}
+input[type=range]{width:140px;accent-color:var(--accent);display:block;margin:0}
+.val{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:5px}
+details.pop{position:relative}
+details.pop > summary{list-style:none;cursor:pointer;font:500 11.5px/1 var(--sans);
+  color:var(--ink);padding:2px 0}
+details.pop > summary::-webkit-details-marker{display:none}
+details.pop > summary::after{content:" ▾";color:var(--faint)}
+details.pop[open] > summary::after{content:" ▴"}
+#layers{position:absolute;bottom:calc(100% + 12px);left:-11px;width:296px;
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px 14px;
+  background:var(--panel);border:1px solid var(--rule);border-radius:9px;
+  padding:11px 13px;box-shadow:var(--shadow-lift)}
+label.row{display:flex;align-items:center;gap:6px;font:400 11.5px/1.7 var(--sans);
+  cursor:pointer;color:var(--graphite)}
+label.row input{accent-color:var(--accent);cursor:pointer;margin:0;width:12px;height:12px}
+.sw{width:9px;height:9px;border-radius:2px;border:1px solid rgba(128,128,128,.35);flex:0 0 auto}
+#tip{display:none}
+.stat{display:flex;gap:18px;font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+.stat b{font-weight:500;color:var(--graphite)}
+@media(max-width:900px){.hero{height:64vh}}
+
+/* ---- sections -------------------------------------------------------- */
+section{padding:78px 0;border-bottom:1px solid var(--rule-soft)}
+section > .wrap > .eyebrow{margin-bottom:10px}
+h2{font-size:clamp(26px,3.2vw,38px);letter-spacing:-.012em;margin-bottom:18px}
+h3{font-size:19px;letter-spacing:-.004em;margin:0 0 8px}
+p{margin:0 0 18px}
+.cols{display:grid;grid-template-columns:1.15fr .85fr;gap:56px;align-items:start}
+@media(max-width:900px){.cols{grid-template-columns:1fr;gap:36px}}
+
+/* the parametric statement */
+.formula{font-family:var(--mono);font-size:13px;line-height:1.85;background:var(--sunk);
+  border:1px solid var(--rule);border-left:3px solid var(--accent);
+  border-radius:0 8px 8px 0;padding:18px 20px;margin:0 0 22px;overflow-x:auto;
+  white-space:pre;color:var(--ink)}
+
+/* dimension table, set like a drawing's figured dimensions */
+table.dims{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px;
+  font-variant-numeric:tabular-nums}
+table.dims td{padding:8px 0;border-bottom:1px solid var(--rule-soft);vertical-align:baseline}
+table.dims td:first-child{color:var(--graphite);font-family:var(--sans);font-size:13px;
+  padding-right:16px}
+table.dims td:last-child{text-align:right;white-space:nowrap;font-weight:500}
+table.dims tr:last-child td{border-bottom:none}
+
+figure{margin:0}
+figcaption{font-family:var(--mono);font-size:10.5px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--faint);margin-top:12px}
+.diagram{background:var(--panel);border:1px solid var(--rule);border-radius:10px;
+  padding:20px;box-shadow:var(--shadow)}
+.diagram svg{display:block;width:100%;height:auto}
+
+/* ---- drawing set ----------------------------------------------------- */
+.sheets{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:22px}
+.sheet{background:var(--panel);border:1px solid var(--rule);border-radius:10px;
+  overflow:hidden;cursor:zoom-in;box-shadow:var(--shadow);text-align:left;padding:0;
+  transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;
+  display:flex;flex-direction:column}
+.sheet:hover{transform:translateY(-3px);box-shadow:var(--shadow-lift);border-color:var(--accent)}
+.sheet .thumb{aspect-ratio:841/594;background:#ffffff;border-bottom:1px solid var(--rule);
+  overflow:hidden;display:block}
+.sheet .thumb img{width:100%;height:100%;object-fit:cover;object-position:left top;display:block}
+.sheet .meta{padding:12px 14px 14px;display:flex;flex-direction:column;gap:3px}
+.sheet .id{font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--accent)}
+.sheet .ttl{font-family:var(--sans);font-size:14px;font-weight:500;color:var(--ink);
+  line-height:1.3}
+.sheet .scl{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+
+/* ---- lightbox -------------------------------------------------------- */
+.lb{position:fixed;inset:0;z-index:90;background:color-mix(in srgb,var(--paper) 96%,transparent);
+  backdrop-filter:blur(8px);display:none;flex-direction:column}
+.lb.open{display:flex}
+.lb-bar{display:flex;align-items:center;gap:16px;padding:12px 20px;
+  border-bottom:1px solid var(--rule);flex:0 0 auto}
+.lb-bar .id{font-family:var(--mono);font-size:12px;color:var(--accent);letter-spacing:.08em}
+.lb-bar .ttl{font-family:var(--sans);font-size:14px;font-weight:500}
+.lb-bar .scl{font-family:var(--mono);font-size:11px;color:var(--faint)}
+.lb-bar .sp{margin-left:auto;display:flex;gap:6px}
+.lb-stage{flex:1 1 auto;overflow:auto;padding:22px;display:flex;
+  align-items:flex-start;justify-content:center}
+.lb-stage img{background:#fff;box-shadow:var(--shadow-lift);border-radius:3px;
+  max-width:none;transition:width .18s ease}
+
+/* ---- file cards ------------------------------------------------------ */
+.files{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px}
+.file{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:18px 20px}
+.file .fn{font-family:var(--mono);font-size:12.5px;color:var(--accent);margin-bottom:7px;
+  word-break:break-all}
+.file p{font-size:14.5px;margin:0;color:var(--graphite);line-height:1.5}
+
+/* ---- open questions -------------------------------------------------- */
+.q{display:grid;grid-template-columns:auto 1fr;gap:14px 16px;align-items:baseline;
+  padding:16px 0;border-bottom:1px solid var(--rule-soft)}
+.q:last-child{border-bottom:none}
+.chip{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--mark);border:1px solid currentColor;border-radius:3px;padding:2px 6px;
+  white-space:nowrap;align-self:start;margin-top:3px}
+.q p{margin:6px 0 0;font-size:15.5px;color:var(--graphite)}
+
+footer{padding:44px 0 64px;color:var(--faint);font-family:var(--mono);font-size:11.5px;
+  line-height:1.9}
+footer .wrap{display:flex;flex-wrap:wrap;gap:8px 40px;justify-content:space-between}
+</style>
+
+<header class="bar">
+  <div class="wrap">
+    <span class="brand">TOR<span>US</span></span>
+    <span class="no">AAI-2601 · REV P03</span>
+    <nav>
+      <a href="#geometry">Geometry</a>
+      <a href="#plan">Plan</a>
+      <a href="#drawings">Drawings</a>
+      <a href="#model">Model</a>
+      <a href="#open">Open questions</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <canvas id="c"></canvas>
+  <div class="hero-title">
+    <div class="wrap">
+      <h1>TORUS</h1>
+      <p>A two-storey office pavilion on a circular clearing</p>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="wrap">
+      <div class="cgroup">
+        <h4>Cutaway</h4>
+        <input type="range" id="cut" min="0" max="180" value="0" step="1"
+               aria-label="Extent of the ring removed">
+        <div class="val"><span id="cutv">0°</span> of the ring removed</div>
+      </div>
+      <div class="cgroup">
+        <h4>Sun azimuth</h4>
+        <input type="range" id="sun" min="0" max="360" value="215" step="1"
+               aria-label="Sun azimuth">
+        <div class="val"><span id="sunv">215°</span></div>
+      </div>
+      <div class="cgroup">
+        <h4>View</h4>
+        <div class="btns">
+          <button data-view="axo">Axonometric</button>
+          <button data-view="top">Plan</button>
+          <button data-view="south">South</button>
+          <button data-view="east">East</button>
+          <button data-view="eye">Eye level</button>
+          <button data-view="court">Courtyard</button>
+          <button id="spin">Orbit: off</button>
+        </div>
+      </div>
+      <details class="cgroup pop">
+        <h4>Elements</h4>
+        <summary>Layers</summary>
+        <div id="layers"></div>
+      </details>
+      <div class="cgroup">
+        <h4>Live model</h4>
+        <div class="stat">
+          <span><b id="m-tri">—</b> tris</span>
+          <span><b id="m-gia">—</b> GIA</span>
+        </div>
+        <div class="val">drag · scroll · shift-drag</div>
+      </div>
+    </div>
+  </div>
+  <div id="tip"></div>
+</div>
+
+<section id="geometry">
+  <div class="wrap">
+    <p class="eyebrow">The parti</p>
+    <h2>The building is a torus, not a ring in plan</h2>
+    <div class="cols">
+      <div>
+        <p class="lede">A circle of radius 7&nbsp;500 swept around a vertical axis at radius
+        30&nbsp;000, with its axis at +2.100 so the ground plane truncates it exactly at the
+        ground-floor slab. The shell springs straight out of the paving on two concentric
+        circles, leans outward to its widest at chest height, and returns to a crown 9.6&nbsp;m
+        up. There is no plinth, no base course and no ramp anywhere on the approach: the
+        external ground plane and FFL&nbsp;00 share one datum all the way round.</p>
+        <div class="formula">P(θ, φ) = ( (30 000 + 7 500·cos φ)·cos θ,
+           (30 000 + 7 500·cos φ)·sin θ,
+            2 100  + 7 500·sin φ )</div>
+        <p class="lede">Two angles describe every point on the building, and every drawing
+        in the set is annotated in them. <b>θ</b> is the plan angle, anticlockwise from east,
+        with radial gridlines R01–R36 at 10° centres. <b>φ</b> is the section angle within the
+        tube: 0° at the outermost point, 90° at the crown, 180° facing the courtyard.</p>
+      </div>
+      <figure class="diagram">
+        __SECTION_SVG__
+        <figcaption>Generating section · φ measured from the outermost point</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="plan">
+  <div class="wrap">
+    <p class="eyebrow">Two plates</p>
+    <h2>Both floors came out identical, and that is the argument</h2>
+    <div class="cols">
+      <div>
+        <p class="lede">Both floors are horizontal chords of the same generating circle,
+        placed symmetrically about its axis at −2.100 and +2.100. Symmetric chords are equal
+        chords, so both plates are annuli from radius 22&nbsp;800 to 37&nbsp;200 —
+        <b>14&nbsp;400 deep, 2&nbsp;714&nbsp;m² each</b>.</p>
+        <p class="lede">That depth is the whole case for the building type. A 14.4&nbsp;m plate
+        glazed on both faces puts no desk more than 7.2&nbsp;m from a window and opens the floor
+        to cross ventilation across its full depth. A conventional deep plan of the same area
+        would be lit from one side and mechanically ventilated throughout.</p>
+        <p class="lede">The geometry is paid for on Level 01, where the shell curves down to
+        meet the slab. Head height falls below 2&nbsp;100 outside radius 36&nbsp;214 and inside
+        radius 23&nbsp;786 — about a metre at each edge, 373&nbsp;m² in total. That strip takes
+        perimeter services, low storage and window seating, and it is where the curved soffit
+        meets the glass, which is the best thing about being on that floor.</p>
+        <h3>Three concentric bands</h3>
+        <p class="lede">22&nbsp;800–26&nbsp;000 is <b>the loop</b>: a continuous 3&nbsp;200 wide
+        circulation ring on the courtyard side, glazed to the court for its whole 188&nbsp;m
+        length. 26&nbsp;000–37&nbsp;200 is the occupied band. Four cores at 45°, 135°, 225° and
+        315° plug that band completely and take the outer face. Putting the cores against the
+        outer facade and the circulation against the courtyard is the reverse of the usual
+        arrangement, and it is what makes the loop worth walking.</p>
+      </div>
+      <div>
+        <table class="dims">
+          <tr><td>Overall diameter</td><td>75 000</td></tr>
+          <tr><td>Courtyard diameter</td><td>45 000</td></tr>
+          <tr><td>Height to shell apex</td><td>9 600</td></tr>
+          <tr><td>Floor plate depth</td><td>14 400</td></tr>
+          <tr><td>Springing radii</td><td>22 800 / 37 200</td></tr>
+          <tr><td>Widest point of shell</td><td>37 500 at +2.100</td></tr>
+          <tr><td>Clear height, Level 00</td><td>3 550</td></tr>
+          <tr><td>Clear height at crown</td><td>5 400</td></tr>
+          <tr><td>Gross internal area</td><td>5 256 m²</td></tr>
+          <tr><td>Footprint</td><td>2 714 m²</td></tr>
+          <tr><td>Courtyard</td><td>1 633 m²</td></tr>
+          <tr><td>Developed envelope</td><td>5 244 m²</td></tr>
+          <tr><td>Workstations drawn</td><td>306</td></tr>
+          <tr><td>Occupancy at 1:8</td><td>657</td></tr>
+          <tr><td>Hoop ribs</td><td>36 at 10.00°</td></tr>
+          <tr><td>Max travel to a stair</td><td>23.6 m</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="drawings">
+  <div class="wrap">
+    <p class="eyebrow">Drawing set · 14 sheets · ISO A1</p>
+    <h2>The full set</h2>
+    <p class="lede" style="margin-bottom:34px">Drawn to ISO 128 line weights and generated from
+    the same parametric model as the 3D geometry above, so they cannot drift apart. Two sheets
+    are worth singling out: <b>A-300</b>, because a plane through the axis of a torus cuts it in
+    two true circles, and <b>A-202</b>, because for a building with no flat facade the unrolled
+    elevation is the only one that tells you where anything is. Click any sheet to open it.</p>
+    <div class="sheets" id="sheets"></div>
+  </div>
+</section>
+
+<section id="model">
+  <div class="wrap">
+    <p class="eyebrow">Model and source</p>
+    <h2>Everything comes from one file of parameters</h2>
+    <p class="lede" style="margin-bottom:30px">Change <span class="num">MAJOR_R</span> or
+    <span class="num">TUBE_Z</span> in <span class="num">params.py</span> and every plan,
+    section, elevation, schedule, mesh and viewer regenerates consistently — including the
+    derived figures written into the drawing notes. Pure Python, standard library only; the
+    whole set redraws in about six tenths of a second.</p>
+    <div class="files">
+      <div class="file"><div class="fn">torus-office.obj</div>
+        <p>Wavefront mesh, 25 182 faces in 17 named groups, metres. Opens in Blender, Rhino,
+        SketchUp or MeshLab.</p></div>
+      <div class="file"><div class="fn">torus-office.scad</div>
+        <p>Parametric OpenSCAD source with customiser parameters and a built-in cutaway
+        toggle.</p></div>
+      <div class="file"><div class="fn">viewer.html</div>
+        <p>The model above, as a standalone file. No network, no libraries, no build step.</p></div>
+      <div class="file"><div class="fn">src/archiai/</div>
+        <p>The generator: params, programme, an ISO drafting kit that writes SVG, and a
+        painter's-algorithm renderer for the axonometrics.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="open">
+  <div class="wrap">
+    <p class="eyebrow">Stage 3 issue</p>
+    <h2>What is still open</h2>
+    <p class="lede" style="margin-bottom:26px">Stated plainly, because they are real.</p>
+    <div class="q"><span class="chip">Access</span><div><h3>Undercroft headroom</h3>
+      <p>The northern gateway gives 3 550 clear, which suits service vehicles but is below the
+      3 700 usually wanted for a fire appliance. The strategy currently relies on perimeter
+      access and a courtyard hydrant instead. If the authority requires appliance access into
+      the court, the Level 01 slab has to be locally raised or the gateway widened.</p></div></div>
+    <div class="q"><span class="chip">Fabrication</span><div><h3>Cold-bending tolerance</h3>
+      <p>The 7 500 radius is a comfortable cold bend for the outer units but tight for the
+      laminated inner leaf at full panel size. This needs a specialist review before the panel
+      module is fixed.</p></div></div>
+    <div class="q"><span class="chip">Brief</span><div><h3>The Level 01 perimeter</h3>
+      <p>373 m² sits below 2 100 head height. It is programmed as services and seating, but it
+      should be tested against the client's own space standards rather than assumed away.</p></div></div>
+    <div class="q"><span class="chip">Maintenance</span><div><h3>Cleaning the shell</h3>
+      <p>A crown walkway is shown; the flanks below +6.000 need either a mast climber running on
+      the perimeter road or a rope access strategy. Not yet resolved.</p></div></div>
+    <div class="q"><span class="chip">Acoustics</span><div><h3>A concave courtyard</h3>
+      <p>A 45 m circular court will focus sound. The inner facade should carry diffusing relief,
+      or the planting should be denser than currently shown.</p></div></div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>ArchiAI Design Studio · AAI-2601 · Rev P03 · 2026-08-19</span>
+    <span>Stage 3 spatial coordination. Issued for coordination, not for construction.</span>
+  </div>
+</footer>
+
+<div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="Drawing sheet">
+  <div class="lb-bar">
+    <span class="id" id="lb-id"></span>
+    <span class="ttl" id="lb-ttl"></span>
+    <span class="scl" id="lb-scl"></span>
+    <span class="sp">
+      <button id="lb-out">−</button>
+      <button id="lb-fit">Fit</button>
+      <button id="lb-in">+</button>
+      <button id="lb-close">Close</button>
+    </span>
+  </div>
+  <div class="lb-stage" id="lb-stage"><img id="lb-img" alt=""></div>
+</div>
+
+<script>
+const SHEETS = __SHEETS__;
+(function(){
+  const grid=document.getElementById("sheets");
+  SHEETS.forEach((s,i)=>{
+    const b=document.createElement("button");
+    b.className="sheet"; b.type="button";
+    b.innerHTML='<span class="thumb"><img alt="" loading="lazy" src="'+s.src+'"></span>'+
+      '<span class="meta"><span class="id">'+s.id+'</span>'+
+      '<span class="ttl">'+s.title+'</span>'+
+      '<span class="scl">'+(s.scale==="—"?"ISO A1":s.scale+" @ A1")+'</span></span>';
+    b.onclick=()=>open_(i);
+    grid.appendChild(b);
+  });
+  const lb=document.getElementById("lb"), img=document.getElementById("lb-img"),
+        stage=document.getElementById("lb-stage");
+  let zoom=1;
+  function fit(){ zoom=1; img.style.width=Math.min(stage.clientWidth-44,1500)+"px"; }
+  function open_(i){
+    const s=SHEETS[i];
+    document.getElementById("lb-id").textContent=s.id;
+    document.getElementById("lb-ttl").textContent=s.title;
+    document.getElementById("lb-scl").textContent=
+      (s.scale==="—"?"ISO A1":s.scale+" @ A1");
+    img.src=s.src; img.alt=s.id+" "+s.title;
+    lb.classList.add("open"); document.body.style.overflow="hidden";
+    requestAnimationFrame(fit);
+  }
+  function close_(){ lb.classList.remove("open"); document.body.style.overflow=""; }
+  function z(f){ zoom=Math.max(1,Math.min(6,zoom*f));
+    img.style.width=(Math.min(stage.clientWidth-44,1500)*zoom)+"px"; }
+  document.getElementById("lb-close").onclick=close_;
+  document.getElementById("lb-fit").onclick=fit;
+  document.getElementById("lb-in").onclick=()=>z(1.45);
+  document.getElementById("lb-out").onclick=()=>z(1/1.45);
+  lb.addEventListener("click",e=>{ if(e.target===lb||e.target===stage) close_(); });
+  addEventListener("keydown",e=>{ if(e.key==="Escape"&&lb.classList.contains("open")) close_(); });
+  addEventListener("resize",()=>{ if(lb.classList.contains("open")) fit(); });
+})();
+</script>
+__VIEWER_SCRIPT__
+<script>
+/* opening framing for the hero: lift the ring clear of the control strip */
+(function(){
+  try{ Object.assign(VIEWS.axo,{az:-118,el:24,dist:158,tz:-7});
+       apply(VIEWS.axo); Object.assign(cam,target); }catch(e){}
+})();
+</script>

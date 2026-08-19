@@ -10,7 +10,7 @@ import os, sys, time
 from . import params as P
 from . import program as PG
 from . import plans, elevations, sections, details, structure, sheets, axo
-from . import model3d, scad, viewer
+from . import model3d, scad, viewer, webpage
 
 PREFIX = P.PROJECT["number"]
 
@@ -75,6 +75,11 @@ def build(out_dir="output"):
     print("  SCAD    %-38s %7.0f kB" % ("parametric source", os.path.getsize(sc) / 1024.0))
     vw = viewer.write(os.path.join(out_dir, "model", "viewer.html"))
     print("  VIEWER  %-38s %7.0f kB" % ("self-contained WebGL", os.path.getsize(vw) / 1024.0))
+
+    pg = webpage.write(os.path.join(out_dir, "web", "index.html"),
+                       os.path.join(out_dir, "drawings"))
+    print("  PAGE    %-38s %7.0f kB" % ("single-file project page",
+                                        os.path.getsize(pg) / 1024.0))
 
     print("-" * 62)
     print("  GIA %s m²   |   %d workstations   |   %d sheets   |   %.1fs" % (
