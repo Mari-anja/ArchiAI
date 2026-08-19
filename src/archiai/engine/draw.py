@@ -77,8 +77,8 @@ def draw_columns(s, v, pts, dia=0.4):
 
 
 def draw_rooms(s, v, fp, tag=True, min_tag_area=14.0):
-    if fp.circulation:
-        s.path(region_path(v, fp.circulation), w=None,
+    for circ in fp.circulation:
+        s.path(region_path(v, circ), w=None,
                fill=L.CATEGORY["circ"][0], rule="evenodd")
     for r in fp.rooms:
         s.path(ring_path(v, r.ring), w="med", color=INK, fill=r.fill)

@@ -44,6 +44,34 @@ ACCOMMODATION = {
     ],
 }
 
+# What goes in the middle of a deep plan, where there is no window. These are
+# the uses that genuinely do not want one.
+INTERNAL = {
+    "office": [
+        ("Meeting room", 0.26, "meet"), ("Focus room", 0.16, "meet"),
+        ("Store and print", 0.14, "plant"), ("Server and comms", 0.08, "plant"),
+        ("WC and showers", 0.14, "plant"), ("Plant and risers", 0.22, "plant"),
+    ],
+    "school": [
+        ("Group room", 0.24, "meet"), ("Resource store", 0.20, "plant"),
+        ("WC", 0.18, "plant"), ("Plant and risers", 0.22, "plant"),
+        ("Server and comms", 0.16, "plant"),
+    ],
+    "residential": [
+        ("Bin and cycle store", 0.26, "plant"), ("Plant and risers", 0.30, "plant"),
+        ("Residents store", 0.24, "plant"), ("Laundry", 0.20, "amenity"),
+    ],
+    "gallery": [
+        ("Collection store", 0.34, "plant"), ("Workshop", 0.20, "plant"),
+        ("Plant and risers", 0.24, "plant"), ("Seminar room", 0.22, "meet"),
+    ],
+    "laboratory": [
+        ("Cold room and store", 0.24, "plant"), ("Equipment room", 0.22, "plant"),
+        ("Meeting room", 0.18, "meet"), ("Plant and risers", 0.24, "plant"),
+        ("Server and comms", 0.12, "plant"),
+    ],
+}
+
 USE_DEFAULTS = {
     "office":      dict(f2f=3.90, daylight=7.5, room_w=7.2, corridor=2.4),
     "school":      dict(f2f=3.60, daylight=7.5, room_w=8.4, corridor=3.0),
@@ -231,6 +259,7 @@ def build(spec):
                     corridor_w=d["corridor"], room_width=d["room_w"],
                     entrance_azimuth=spec.entrance, name=spec.name)
     brief.accommodation = ACCOMMODATION[spec.use]
+    brief.internal = INTERNAL[spec.use]
     return massing, brief
 
 

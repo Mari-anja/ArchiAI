@@ -180,12 +180,11 @@ def risers(floorplan):
 
 
 def containment(floorplan):
-    """Main horizontal route: the circulation spine, drawn as its centreline."""
-    circ = floorplan.circulation
-    if not circ:
-        return []
-    routes = [circ.outer]
-    routes += list(circ.holes)
+    """Horizontal routes: every circulation ring, drawn as its centreline."""
+    routes = []
+    for circ in floorplan.circulation:
+        routes.append(circ.outer)
+        routes += list(circ.holes)
     return routes
 
 

@@ -267,7 +267,7 @@ def schedule_sheet(project, out, number="A-700", paper="A1"):
         s.text(col, yy, lv.name, 2.4, "start", INK)
         s.text(col + 62, yy, "%+.3f" % lv.ffl, 2.4, "start", GREY)
         s.text(col + 104, yy, str(len(fp.rooms)), 2.4, "start", GREY)
-        s.text(col + 150, yy, _sp(fp.circulation.area if fp.circulation else 0),
+        s.text(col + 150, yy, _sp(fp.circulation_area),
                2.4, "end", GREY)
         s.text(col + 250, yy, _sp(lv.area), 2.4, "end", INK, "600")
         yy += 6.4
@@ -280,8 +280,7 @@ def schedule_sheet(project, out, number="A-700", paper="A1"):
     for fp in project.floorplans:
         for k, val in fp.by_category().items():
             agg[k] = agg.get(k, 0.0) + val
-    circ_total = sum(f.circulation.area if f.circulation else 0
-                     for f in project.floorplans)
+    circ_total = sum(f.circulation_area for f in project.floorplans)
     agg["circ"] = agg.get("circ", 0.0) + circ_total
     s.text(col, yy, "AREA BY USE", 3.4, "start", INK, "700", spacing=1.2)
     s.line(col, yy + 4, col + 250, yy + 4, w="med", color=INK)

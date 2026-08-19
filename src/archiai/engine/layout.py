@@ -23,10 +23,11 @@ CATEGORY = {
 
 
 class Room:
-    __slots__ = ("code", "name", "ring", "cat", "sub")
+    __slots__ = ("code", "name", "ring", "cat", "sub", "daylit")
 
-    def __init__(self, code, name, ring, cat="work", sub=None):
+    def __init__(self, code, name, ring, cat="work", sub=None, daylit=True):
         self.code, self.name, self.ring, self.cat, self.sub = code, name, ring, cat, sub
+        self.daylit = daylit
 
     @property
     def area(self):
@@ -50,7 +51,13 @@ class Room:
 
 class Floorplan:
     def __init__(self, level, rooms, circulation, plate):
-        self.level, self.rooms, self.circulation, self.plate = level, rooms, circulation, plate
+        self.level, self.rooms, self.plate = level, rooms, plate
+        # A deep plan has more than one corridor, so this is a list.
+        self.circulation = list(circulation) if circulation else []
+
+    @property
+    def circulation_area(self):
+        return sum(r.area for r in self.circulation)
 
     @property
     def gia(self):
@@ -63,14 +70,15 @@ class Floorplan:
         return agg
 
     def __repr__(self):
-        return "<Floorplan %s: %d rooms, %.0f m2>" % (self.level.name, len(self.rooms), self.gia)
+        return "<Floorplan %s: %d rooms, %d corridors, %.0f m2>" % (
+            self.level.name, len(self.rooms), len(self.circulation), self.gia)
 
 
 class Brief:
     """What the user asked for, normalised."""
 
     def __init__(self, use="office", daylight_depth=7.5, corridor_w=2.4,
-                 room_width=7.2, core_spacing=40.0, core_w=9.0, core_depth=None,
+                 room_width=7.2, core_spacing=62.0, core_w=9.0, core_depth=None,
                  wall_t=0.35, entrance_azimuth=270.0, name="Untitled",
                  desk_area=8.0):
         self.use = use
@@ -196,7 +204,8 @@ def _point_and_normal(ring, cum, frac):
 
 
 def subdivide_band(outer, inner, target_w, code_prefix="R", name="Workspace",
-                   cat="work", start_index=1, min_area=2.5, max_area=None):
+                   cat="work", start_index=1, min_area=2.5, max_area=None,
+                   daylit=True):
     """Cut the band between two rings into rooms about `target_w` wide."""
     outer = G.resample(G.ccw(G.dedupe(outer)), max(0.5, target_w / 10.0))
     inner = G.resample(G.ccw(G.dedupe(inner)), max(0.5, target_w / 10.0))
@@ -237,7 +246,8 @@ def subdivide_band(outer, inner, target_w, code_prefix="R", name="Workspace",
             inner_pts = [_pos_point(inner, cum_i, walk[i])]
         ring = G.dedupe(outer_pts + inner_pts)
         if len(ring) >= 3 and min_area <= G.area(ring) <= cap:
-            rooms.append(Room("%s.%02d" % (code_prefix, idx), name, G.ccw(ring), cat))
+            rooms.append(Room("%s.%02d" % (code_prefix, idx), name, G.ccw(ring),
+                              cat, daylit=daylit))
             idx += 1
     return rooms
 
@@ -339,88 +349,294 @@ def programme_for_level(brief, level_index):
 
 
 def assign_programme(rooms, brief, centre, level_index):
-    """Walk the plan from the entrance and fill the schedule in order."""
-    prog = programme_for_level(brief, level_index)
-    if not prog:
-        return
-    free = [r for r in rooms if r.cat != "core"]
-    if not free:
-        return
+    """Walk the plan from the entrance and fill the schedule in order.
+
+    Daylit rooms and internal rooms are filled from different schedules: a
+    meeting room is happy without a window, a workspace is not."""
     ent = math.radians(getattr(brief, "entrance_azimuth", 270.0))
 
     def sweep(r):
         cx, cy = r.centroid
         return (math.atan2(cy - centre[1], cx - centre[0]) - ent) % (2 * math.pi)
 
-    free.sort(key=sweep)
-    total = sum(r.area for r in free)
-    i = 0
-    for (name, share, cat) in prog:
-        quota = total * share
-        got = 0.0
-        while i < len(free) and got < quota - 1e-9:
-            r = free[i]
-            r.name, r.cat = name, cat
-            got += r.area
-            i += 1
-    fallback = prog[0]
-    for r in free[i:]:
-        r.name, r.cat = fallback[0], fallback[2]
+    def fill(pool, prog):
+        if not pool or not prog:
+            return
+        pool.sort(key=sweep)
+        total = sum(r.area for r in pool)
+        i = 0
+        for (name, share, cat) in prog:
+            quota = total * share
+            got = 0.0
+            while i < len(pool) and got < quota - 1e-9:
+                r = pool[i]
+                r.name, r.cat = name, cat
+                got += r.area
+                i += 1
+        for r in pool[i:]:
+            r.name, r.cat = prog[0][0], prog[0][2]
+
+    free = [r for r in rooms if r.cat != "core"]
+    fill([r for r in free if r.daylit], programme_for_level(brief, level_index))
+    internal = list(getattr(brief, "internal", []) or [])
+    if internal:
+        rank = ("meet", "amenity", "plant", "work")
+        internal = sorted(internal, key=lambda p: rank.index(p[2])
+                          if p[2] in rank else 99)
+    fill([r for r in free if not r.daylit], internal)
+
+
+MIN_ZONE_M2 = 12.0
+MAX_RINGS = 8
+
+
+def _band_pairs(outer_region, inner_region):
+    """Matching ring pairs between a region and its inward offset."""
+    pairs = [(outer_region.outer, inner_region.outer, "perimeter")]
+    for a, b in zip(outer_region.holes, inner_region.holes):
+        pairs.append((a, b, "courtyard"))
+    return pairs
+
+
+def _corridor_regions(outer_region, inner_region):
+    """The ring of circulation between two offsets, as drawable regions."""
+    out = []
+    if G.area(outer_region.outer) - G.area(inner_region.outer) > 1.0:
+        out.append(G.Region(outer_region.outer, [inner_region.outer]))
+    for a, b in zip(outer_region.holes, inner_region.holes):
+        if G.area(b) - G.area(a) > 1.0:
+            out.append(G.Region(b, [a]))
+    return out
+
+
+def _viable(region, min_area=MIN_ZONE_M2):
+    if region is None or region.area < min_area:
+        return False
+    x0, y0, x1, y1 = region.bbox()
+    return min(x1 - x0, y1 - y0) > 1.5
+
+
+def _shrunk_ok(parent, child, min_area=MIN_ZONE_M2, samples=48):
+    """Did the inward offset actually stay inside its parent?
+
+    Mitred offsetting has no idea where the medial axis is. Push a narrow
+    shape in by more than half its width and the outline turns itself inside
+    out: the ring self-intersects, its area comes back positive, and every
+    downstream check is happy while the geometry is nonsense. Overlapping
+    rooms were being generated on any plan narrower than twice the daylight
+    band. Verify containment rather than trusting the offset."""
+    if not _viable(child, min_area):
+        return False
+    if child.area >= parent.area - 0.5:
+        return False
+    # Probe the holes as well as the outer ring. On a plan with a courtyard
+    # the hole grows as the outline shrinks, and the two eventually collide;
+    # checking only the outer ring misses that entirely.
+    probe = []
+    for ring in child.rings:
+        step = max(1, len(ring) // samples)
+        probe += ring[::step] or ring
+    if not probe:
+        return False
+    outside = sum(0 if parent.contains(p) else 1 for p in probe)
+    return outside <= len(probe) * 0.02
 
 
 def allocate(level, brief, level_index=0):
-    """Daylight bands + a circulation spine, with cores punched into the band."""
+    """Peel the plate into concentric occupied zones separated by corridors.
+
+    A shallow plan peels once and stops: a daylight band with a spine behind
+    it. A deep plan keeps peeling, so the middle becomes internal rooms --
+    meeting rooms, stores, plant -- instead of one undifferentiated blob of
+    circulation. Rooms beyond the first ring are marked as not daylit, and the
+    programme puts uses there that do not need a window."""
     plate = level.plate
     d, cw = brief.daylight_depth, brief.corridor_w
-    rooms = []
-    band_pairs = []
-
-    inner_face = plate.offset(brief.wall_t)
-    core_ring = inner_face.offset(d)                     # inboard edge of the outer band
-    band_pairs.append((inner_face.outer, core_ring.outer, "outer"))
-    for h_in, h_core in zip(inner_face.holes, core_ring.holes):
-        band_pairs.append((h_in, h_core, "court"))
-
     prefix = "%02d" % level_index
+    rooms, circulation = [], []
     idx = 1
-    outer_rooms = []
-    for (o, i, which) in band_pairs:
-        if G.area(o) < 4.0 or G.area(i) < 4.0:
-            continue
-        new = subdivide_band(o, i, brief.room_width,
-                             code_prefix=prefix, start_index=idx,
-                             name=("Workspace" if which == "outer" else "Studio"))
-        rooms += new
-        if which == "outer":
-            outer_rooms = new
-        idx += len(new)
+    perimeter_rooms = []
 
-    # Cores punched into the outer band, spaced by escape distance and placed
-    # on the roomiest bays so they never land on a corner sliver.
-    pool = outer_rooms or rooms
-    if pool:
-        n_cores = max(2, int(math.ceil(
-            G.perimeter(inner_face.outer) / brief.core_spacing)))
-        n_cores = min(n_cores, max(1, len(pool) // 3))
-        step = len(pool) / float(n_cores)
-        median = sorted(r.area for r in pool)[len(pool) // 2]
-        placed = 0
-        for c in range(n_cores):
-            base = int(round(c * step)) % len(pool)
-            pick = None
-            for off in (0, 1, -1, 2, -2):
-                cand = pool[(base + off) % len(pool)]
-                if cand.cat == "work" and cand.area >= median * 0.8:
-                    pick = cand
-                    break
-            if pick is None:
+    cur = plate.offset(brief.wall_t)
+    depth = d
+    daylit = True
+    ring = 0
+    budget = plate.area                       # never allocate more than the floor
+
+    while ring < MAX_RINGS and _viable(cur) and budget > MIN_ZONE_M2:
+        nxt = cur.offset(depth)
+        if not _shrunk_ok(cur, nxt):
+            # Nothing worth a corridor behind this band: the rest is one zone.
+            for (o, i, which) in _band_pairs(cur, cur.offset(min(depth, 2.0))):
+                pass
+            new = _rooms_from_region(cur, brief, prefix, idx, daylit, ring)
+            rooms += new
+            if ring == 0:
+                perimeter_rooms = new
+            idx += len(new)
+            cur = None
+            break
+
+        for (o, i, which) in _band_pairs(cur, nxt):
+            if G.area(o) < 4.0 or G.area(i) < 4.0:
                 continue
-            pick.cat = "core"
-            pick.name = "Core %s" % chr(ord("A") + placed)
-            pick.code = "%s.C%d" % (prefix, placed + 1)
-            placed += 1
+            new = subdivide_band(o, i, brief.room_width, code_prefix=prefix,
+                                 start_index=idx, daylit=daylit,
+                                 name="Workspace" if daylit else "Internal room")
+            rooms += new
+            budget -= sum(r.area for r in new)
+            if ring == 0 and which == "perimeter":
+                perimeter_rooms = new
+            idx += len(new)
 
+        after = nxt.offset(cw)
+        if not _shrunk_ok(nxt, after):
+            circulation.append(G.Region(nxt.outer, nxt.holes))
+            cur = None
+            break
+        corr = _corridor_regions(nxt, after)
+        circulation += corr
+        budget -= sum(c.area for c in corr)
+        cur, depth, daylit = after, brief.room_width * 1.15, False
+        ring += 1
+
+    if cur is not None and _viable(cur) and budget > MIN_ZONE_M2:
+        rooms += _rooms_from_region(cur, brief, prefix, idx, False, ring)
+
+    _place_cores(perimeter_rooms or rooms, brief, plate, prefix)
+    _ensure_escape(rooms, brief, prefix)
     assign_programme(rooms, brief, G.centroid(plate.outer), level_index)
+    return Floorplan(level, rooms, circulation, plate)
 
-    circ = G.Region(core_ring.outer, core_ring.holes) if core_ring.outer else None
-    return Floorplan(level, rooms, circ, plate)
+
+ESCAPE_LIMIT = 45.0
+ESCAPE_FACTOR = 1.30
+
+
+def _ensure_escape(rooms, brief, prefix, limit=ESCAPE_LIMIT, max_extra=32):
+    """Add cores inland until every room can reach one within the limit.
+
+    Perimeter cores alone are fine on a shallow plan and hopeless on a deep
+    one: a 160 x 140 plate leaves the middle 92 m from the nearest stair
+    against a 45 m limit. Rather than draw that in red and leave it, promote
+    internal rooms to cores, picking at each step the one that cuts the worst
+    travel most.
+
+    Centroids are taken once and each room's nearest-core distance is carried
+    forward. Recomputing either inside the search -- centroid is a property
+    that walks every vertex of the polygon -- turned a fraction of a second
+    into minutes on a large plate."""
+    cores = [r for r in rooms if r.cat == "core"]
+    others = [r for r in rooms if r.cat != "core"]
+    if not cores or not others:
+        return
+
+    pts = [r.centroid for r in others]
+    core_pts = [c.centroid for c in cores]
+    lim2 = (limit / ESCAPE_FACTOR) ** 2
+    near = [min((p[0] - c[0]) ** 2 + (p[1] - c[1]) ** 2 for c in core_pts)
+            for p in pts]
+
+    for _ in range(max_extra):
+        current = max(near)
+        if current <= lim2:
+            break
+        idx = [i for i, r in enumerate(others)
+               if r.cat != "core" and r.area >= 12.0]
+        if not idx:
+            break
+        step = max(1, len(idx) // 60)
+        best_i, best_worst = None, current
+        for i in idx[::step]:
+            qx, qy = pts[i]
+            w = 0.0
+            for j, (px, py) in enumerate(pts):
+                if j == i:
+                    continue
+                d = (px - qx) ** 2 + (py - qy) ** 2
+                v = near[j] if near[j] < d else d
+                if v > w:
+                    w = v
+                    if w >= best_worst:
+                        break
+            if w < best_worst:
+                best_i, best_worst = i, w
+        if best_i is None:
+            break
+
+        pick = others[best_i]
+        pick.cat = "core"
+        pick.name = "Core %s" % chr(ord("A") + len(cores))
+        pick.code = "%s.C%d" % (prefix, len(cores) + 1)
+        cores.append(pick)
+        qx, qy = pts[best_i]
+        for j, (px, py) in enumerate(pts):
+            d = (px - qx) ** 2 + (py - qy) ** 2
+            if d < near[j]:
+                near[j] = d
+        near[best_i] = 0.0
+
+
+
+def _rooms_from_region(region, brief, prefix, idx, daylit, ring):
+    """Turn a residual zone into rooms rather than leaving it undivided.
+
+    A region with a hole is an annulus, and its outer ring on its own is not a
+    room -- it spans the courtyard. Falling back to one solid room from the
+    outer ring was laying a floor over the void and double-counting the whole
+    middle of the building."""
+    name = "Workspace" if daylit else "Internal room"
+    cat = "work" if daylit else "plant"
+
+    if region.holes:
+        out = []
+        for h in region.holes:
+            if G.area(region.outer) - G.area(h) < 4.0:
+                continue
+            out += subdivide_band(region.outer, h, brief.room_width,
+                                  code_prefix=prefix, start_index=idx + len(out),
+                                  daylit=daylit, name=name)
+        return out
+
+    inner = region.offset(min(brief.room_width * 0.5,
+                              max(1.0, math.sqrt(region.area) * 0.28)))
+    if _shrunk_ok(region, inner, 4.0):
+        out = subdivide_band(region.outer, inner.outer, brief.room_width,
+                             code_prefix=prefix, start_index=idx,
+                             daylit=daylit, name=name)
+        if out:
+            if inner.area >= MIN_ZONE_M2:
+                out.append(Room("%s.%02d" % (prefix, idx + len(out)), name,
+                                G.ccw(inner.outer), "plant", daylit=daylit))
+            return out
+    return [Room("%s.%02d" % (prefix, idx), name, G.ccw(region.outer), cat,
+                 daylit=daylit)]
+
+
+def _place_cores(pool, brief, plate, prefix):
+    """Cores punched into the outermost band, spaced by escape distance."""
+    pool = [r for r in pool if r.cat == "work"]
+    if not pool:
+        return
+    # Escape distance sets the minimum; six stairs is as many as any single
+    # plate needs, and more than that is lost lettable area.
+    n_cores = max(2, int(math.ceil(
+        G.perimeter(plate.outer) / brief.core_spacing)))
+    n_cores = min(n_cores, 6, max(1, len(pool) // 3))
+    step = len(pool) / float(n_cores)
+    median = sorted(r.area for r in pool)[len(pool) // 2]
+    placed = 0
+    for c in range(n_cores):
+        base = int(round(c * step)) % len(pool)
+        pick = None
+        for off in (0, 1, -1, 2, -2):
+            cand = pool[(base + off) % len(pool)]
+            if cand.cat == "work" and cand.area >= median * 0.8:
+                pick = cand
+                break
+        if pick is None:
+            continue
+        pick.cat = "core"
+        pick.name = "Core %s" % chr(ord("A") + placed)
+        pick.code = "%s.C%d" % (prefix, placed + 1)
+        placed += 1

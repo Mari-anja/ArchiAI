@@ -91,13 +91,17 @@ def manifest(project, sheets, spec=None, model=None):
     for i, lv in enumerate(m.levels):
         fp = project.floorplans[i]
         rooms = [{"code": r.code, "name": r.name, "category": r.cat,
-                  "area_m2": round(r.area, 1)} for r in fp.rooms]
+                  "area_m2": round(r.area, 1), "daylit": r.daylit}
+                 for r in fp.rooms]
         levels.append({
             "index": i, "name": lv.name, "ffl_m": round(lv.ffl, 3),
             "floor_to_floor_m": round(lv.to_ffl, 3),
             "area_m2": round(lv.area, 1),
-            "circulation_m2": round(fp.circulation.area, 1) if fp.circulation else 0.0,
-            "room_count": len(fp.rooms), "rooms": rooms,
+            "circulation_m2": round(fp.circulation_area, 1),
+            "room_count": len(fp.rooms), "corridors": len(fp.circulation),
+            "daylit_m2": round(sum(r.area for r in fp.rooms if r.daylit), 1),
+            "internal_m2": round(sum(r.area for r in fp.rooms if not r.daylit), 1),
+            "rooms": rooms,
         })
     foot = m.footprint()
     out = {
