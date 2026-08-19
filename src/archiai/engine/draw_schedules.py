@@ -411,3 +411,398 @@ def cover_sheet(project, register, out, number="A-000", paper="A1"):
            "model; change a dimension and the whole set redraws.", 2.4,
            "start", GREY, italic=True)
     return s.save(out)
+
+
+# ---------------------------------------------------------------------------
+# Door and window schedule
+# ---------------------------------------------------------------------------
+def _table(s, x, y, width, cols, rows, title, note=None):
+    """A ruled schedule table. cols = [(label, dx, anchor), ...]."""
+    s.text(x, y, title, 3.4, "start", INK, "700", spacing=1.2)
+    s.line(x, y + 4, x + width, y + 4, w="med", color=INK)
+    yy = y + 12
+    for (lab, dx, anc) in cols:
+        s.text(x + dx, yy, lab, 2.0, anc, GREY, "600", spacing=0.7)
+    yy += 5.6
+    s.line(x, yy - 2.6, x + width, yy - 2.6, w="hatch", color=LIGHT)
+    for row in rows:
+        for (cell, (lab, dx, anc)) in zip(row, cols):
+            bold = "600" if lab in ("MARK", "No.") else "400"
+            s.text(x + dx, yy, cell, 2.4, anc,
+                   INK if bold == "600" else GREY, bold)
+        s.line(x, yy + 2.2, x + width, yy + 2.2, w="hatch", color=LIGHT)
+        yy += 6.6
+    if note:
+        s.text(x, yy + 3, note, 2.1, "start", GREY, italic=True)
+        yy += 7
+    return yy
+
+
+def _dim_mm(s, x1, y1, x2, y2, label, size=1.9):
+    """A dimension drawn straight in sheet millimetres (for type elevations)."""
+    s.line(x1, y1, x2, y2, w="fine", color=GREY)
+    t = 1.1
+    if abs(y2 - y1) < 0.01:
+        s.line(x1, y1 - t, x1, y1 + t, w="fine", color=GREY)
+        s.line(x2, y2 - t, x2, y2 + t, w="fine", color=GREY)
+        s.text((x1 + x2) / 2, y1 - 1.6, label, size, "middle", GREY)
+    else:
+        s.line(x1 - t, y1, x1 + t, y1, w="fine", color=GREY)
+        s.line(x2 - t, y2, x2 + t, y2, w="fine", color=GREY)
+        s.text(x1 - 1.6, (y1 + y2) / 2, label, size, "end", GREY)
+
+
+GLYPH_K = 0.034      # sheet mm per mm of opening (about 1:30)
+
+IRONMONGERY = [
+    ("IS1", "D1", "1½ pr hinges, lever latch, indicator where WC"),
+    ("IS2", "D2", "2 pr hinges per leaf, lever latch, flush bolts"),
+    ("IS3", "D3", "1½ pr fire hinges, overhead closer, intumescent set"),
+    ("IS4", "D4", "Fire hinges, closers, panic hardware, coordinator"),
+    ("IS5", "D5", "Sliding gear, break-out leaves, sensor and safety beam"),
+]
+
+
+def _door_glyph(s, x, y, w_mm, h_mm, double, k=GLYPH_K):
+    """An elevation of the leaf at a common scale (about 1:30)."""
+    w, h = w_mm * k, h_mm * k
+    s.rect(x, y - h, w, h, w="thin", color=INK, fill="#f4f2ee")
+    if double:
+        s.line(x + w / 2, y - h, x + w / 2, y, w="fine", color=GREY)
+        for cx in (x + w * 0.40, x + w * 0.60):
+            s.circle(cx, y - h * 0.45, 1.1, w="fine", color=INK, fill=INK)
+    else:
+        s.rect(x + w * 0.12, y - h * 0.90, w * 0.76, h * 0.78, w="fine",
+               color="#c3c0bb")
+        s.circle(x + w * 0.84, y - h * 0.45, 1.1, w="fine", color=INK, fill=INK)
+    s.line(x - 2, y, x + w + 2, y, w="med", color=INK)
+    _dim_mm(s, x, y + 6, x + w, y + 6, "%d" % w_mm)
+    _dim_mm(s, x - 6, y, x - 6, y - h, "%d" % h_mm)
+
+
+def _window_glyph(s, x, y, w_mm, h_mm, curtain, k=GLYPH_K):
+    w, h = w_mm * k, h_mm * k
+    s.rect(x, y - h, w, h, w="thin", color=INK, fill="#e9f0f4")
+    s.rect(x + 1.2, y - h + 1.2, max(w - 2.4, 0.4), max(h - 2.4, 0.4),
+           w="fine", color="#9fb6c4")
+    if curtain:
+        s.line(x, y - h * 0.72, x + w, y - h * 0.72, w="fine", color=GREY)
+        s.text(x + w / 2, y - h * 0.86, "transom", 1.6, "middle", GREY)
+    else:
+        s.line(x + w / 2, y - h, x + w / 2, y, w="fine", color=GREY)
+        s.line(x + w * 0.52, y - h * 0.5, x + w * 0.92, y - h * 0.5, w="fine",
+               color=GREY, dash="2,1.4")
+    s.line(x - 2, y, x + w + 2, y, w="med", color=INK)
+    _dim_mm(s, x, y + 6, x + w, y + 6, "%d" % w_mm)
+    _dim_mm(s, x - 6, y, x - 6, y - h, "%d" % h_mm)
+
+
+def _matrix(s, x, y, width, title, keys, rows, note=None):
+    """A mark-by-something count matrix with row and column totals."""
+    s.text(x, y, title, 3.0, "start", GREY, "700", spacing=1.4)
+    s.line(x, y + 3.6, x + width, y + 3.6, w="med", color=INK)
+    yy = y + 11
+    n = len(keys)
+    span = width - 60.0
+    step = span / max(n, 1)
+    s.text(x, yy, "MARK", 2.0, "start", GREY, "600", spacing=0.7)
+    for j, k in enumerate(keys):
+        s.text(x + 46 + step * (j + 0.5), yy, k.upper(), 2.0, "middle", GREY,
+               "600", spacing=0.7)
+    s.text(x + width, yy, "TOTAL", 2.0, "end", GREY, "600", spacing=0.7)
+    yy += 5.6
+    s.line(x, yy - 2.6, x + width, yy - 2.6, w="hatch", color=LIGHT)
+    col_tot = [0] * n
+    for (mark, counts) in rows:
+        s.text(x, yy, mark, 2.4, "start", INK, "600")
+        for j, k in enumerate(keys):
+            c = counts.get(k, 0)
+            col_tot[j] += c
+            s.text(x + 46 + step * (j + 0.5), yy, str(c) if c else "–", 2.4,
+                   "middle", INK if c else LIGHT)
+        s.text(x + width, yy, str(sum(counts.values())), 2.4, "end", INK, "600")
+        s.line(x, yy + 2.2, x + width, yy + 2.2, w="hatch", color=LIGHT)
+        yy += 6.4
+    s.line(x, yy - 2.2, x + width, yy - 2.2, w="thin", color=INK)
+    s.text(x, yy + 2.4, "TOTAL", 2.4, "start", INK, "700")
+    for j in range(n):
+        s.text(x + 46 + step * (j + 0.5), yy + 2.4, str(col_tot[j]), 2.4,
+               "middle", INK, "700")
+    s.text(x + width, yy + 2.4, str(sum(col_tot)), 2.6, "end", INK, "700")
+    yy += 10
+    if note:
+        s.text(x, yy, note, 2.1, "start", GREY, italic=True)
+        yy += 6
+    return yy
+
+
+def _glyph_row(s, x, top, width, items, draw_one):
+    """Lay type elevations across the column, shrunk to fit on one row."""
+    if not items:
+        return top
+    n = len(items)
+    gap = 26.0 if n <= 4 else 16.0
+    total = sum(it["width_mm"] for it in items)
+    k = min(GLYPH_K, (width - 22.0 - gap * (n - 1)) / max(total, 1.0))
+    k = max(k, 0.012)
+    base = top + max(it["height_mm"] for it in items) * k + 4.0
+    gx = x + 12
+    for it in items:
+        draw_one(s, gx, base, it, k)
+        gx += max(it["width_mm"] * k, 26.0) + gap
+    return base + 32.0
+
+
+def _door_key_plan(s, project, i, x, y, w_mm, h_mm, title):
+    """A small plan with every door marked, so the schedule can be located."""
+    from . import openings as OP
+    lv = project.massing.levels[i]
+    fp = project.floorplans[i]
+    bx = lv.plate.bbox()
+    scale = fit_scale(bx, w_mm, h_mm, margin_mm=14.0)
+    mx, my = (bx[0] + bx[2]) / 2.0, (bx[1] + bx[3]) / 2.0
+    v = View(s, scale, x + w_mm / 2.0 - mx * 1000.0 / scale,
+             y + h_mm / 2.0 + my * 1000.0 / scale)
+    s.text(x, y - 6, title, 3.0, "start", GREY, "700", spacing=1.4)
+    s.line(x, y - 2.4, x + w_mm, y - 2.4, w="med", color=INK)
+    for r in fp.rooms:
+        s.path(ring_path(v, r.ring), w="fine", color="#cfd3d6", fill="#fbfbfa")
+    for c in fp.circulation:
+        s.path(region_path(v, c), w="fine", color="#d8d2c4", fill="#f2ede1",
+               rule="evenodd")
+    s.path(ring_path(v, lv.plate.outer), w="med", color=INK)
+    for hole in lv.plate.holes:
+        s.path(ring_path(v, hole), w="med", color=INK)
+    placed = []
+    for d in OP.doors(project, i):
+        px, py = v.p(*d.point)
+        s.circle(px, py, 1.5, w="fine", color=RED, fill="#ffffff")
+        best = None
+        for (dx, dy, anc) in ((3.4, -1.4, "start"), (-3.4, -1.4, "end"),
+                              (3.4, 3.2, "start"), (-3.4, 3.2, "end"),
+                              (0.0, -4.4, "middle"), (0.0, 5.6, "middle")):
+            lx, ly = px + dx, py + dy
+            if any(abs(ox - lx) < 7.0 and abs(oy - ly) < 3.0
+                   for (ox, oy) in placed):
+                continue
+            best = (lx, ly, anc)
+            break
+        if best is None:
+            continue                       # too crowded to letter legibly
+        placed.append(best[:2])
+        s.text(best[0], best[1], d.mark, 2.0, best[2], RED, "600")
+    s.text(x, y + h_mm + 4, "Scale 1:%d.  Every door on this level is marked; "
+           "the schedule counts them across the building." % scale,
+           2.1, "start", GREY, italic=True)
+
+
+def _bay_setting_out(s, project, x, y, w_mm, h_mm, title):
+    """One structural bay of curtain walling, dimensioned for setting out."""
+    from . import openings as OP
+    from .draw import facade_bays
+    bays = facade_bays(project, 270.0)
+    span = (bays[1] - bays[0]) if len(bays) > 1 else project.brief.room_width
+    m = project.massing
+    sh = m.levels[0].to_ffl
+    clear = span - 2 * OP.REVEAL
+    n, mod = OP._split(clear)
+
+    k = min((w_mm - 40.0) / max(span, 0.1), (h_mm - 30.0) / max(sh, 0.1))
+    ox, oy = x + 24.0, y + h_mm - 18.0            # model origin: bay left, FFL
+
+    def P(mx_, mz):
+        return (ox + mx_ * k, oy - mz * k)
+
+    s.text(x, y - 6, title, 3.0, "start", GREY, "700", spacing=1.4)
+    s.line(x, y - 2.4, x + w_mm, y - 2.4, w="med", color=INK)
+
+    s.rect(*P(0.0, sh), span * k, sh * k, w="fine", color="#e4e0d8",
+           fill="#faf9f6")
+    for z, lab in ((0.0, "FFL"), (sh, "SOFFIT OVER")):
+        a, b = P(-0.5, z), P(span + 0.5, z)
+        s.line(a[0], a[1], b[0], b[1], w="med", color=INK)
+        s.text(b[0] + 2, b[1] + 1, lab, 1.9, "start", GREY, "600")
+    for mx_ in (0.0, span):                       # mullion on the grid
+        a, b = P(mx_, -0.4), P(mx_, sh + 0.4)
+        s.line(a[0], a[1], b[0], b[1], w="grid", color=BLUE, dash="6,2,1,2")
+
+    z0, z1 = OP.SILL, sh - OP.HEAD_GAP
+    gl = P(OP.REVEAL, z1)
+    s.rect(gl[0], gl[1], clear * k, (z1 - z0) * k, w="thin", color=INK,
+           fill="#e9f0f4")
+    for j in range(1, n):
+        a, b = P(OP.REVEAL + mod * j, z1), P(OP.REVEAL + mod * j, z0)
+        s.line(a[0], a[1], b[0], b[1], w="thin", color=INK)
+    sp_a, sp_b = P(OP.REVEAL, z0), P(OP.REVEAL, 0.0)
+    s.rect(sp_a[0], sp_a[1], clear * k, (z0 - 0.0) * k, w="fine", color=GREY,
+           fill="#dfdcd6")
+    s.text((sp_a[0] + sp_a[0] + clear * k) / 2.0, sp_a[1] + (z0 * k) / 2.0 + 1,
+           "SPANDREL", 1.9, "middle", GREY, "600", spacing=0.6)
+    hd_a = P(OP.REVEAL, sh)
+    s.rect(hd_a[0], hd_a[1], clear * k, OP.HEAD_GAP * k, w="fine", color=GREY,
+           fill="#dfdcd6")
+
+    a, b = P(0.0, 0.0), P(span, 0.0)
+    _dim_mm(s, a[0], a[1] + 12, b[0], b[1] + 12, "%d structural bay"
+            % int(round(span * 1000)))
+    a, b = P(OP.REVEAL, 0.0), P(span - OP.REVEAL, 0.0)
+    _dim_mm(s, a[0], a[1] + 6, b[0], b[1] + 6,
+            "%d x %d modules" % (n, int(round(mod * 1000))))
+    a, b = P(0.0, 0.0), P(0.0, sh)
+    _dim_mm(s, a[0] - 8, a[1], b[0] - 8, b[1], "%d floor to floor"
+            % int(round(sh * 1000)))
+    a, b = P(0.0, 0.0), P(0.0, OP.SILL)
+    _dim_mm(s, a[0] - 16, a[1], b[0] - 16, b[1], "%d sill"
+            % int(round(OP.SILL * 1000)))
+    s.text(x, y + h_mm + 4, "Reveal %d mm each side. Mullions sit on the "
+           "structural grid; transom at mid height of the vision panel."
+           % int(OP.REVEAL * 1000), 2.1, "start", GREY, italic=True)
+
+
+def door_window_sheet(project, out, number="A-710", paper="A1"):
+    from . import openings as OP
+    P = project.info
+    s = Sheet(number, "Door and Window Schedule", "—", paper,
+              "Counted from the model", P,
+              ["Sizes are structural openings; frames to be site measured.",
+               "Fire ratings to BS 476 Part 22 / EN 1634-1.",
+               "All fire doors to carry intumescent and smoke seals.",
+               "Type elevations at 1:30; counts taken from the floor plans."])
+    s.frame()
+    x0, y0, x1, y1 = s.area()
+
+    doors = OP.door_schedule(project)
+    wins = OP.windows(project)
+    tot = OP.totals(project)
+    W = 268.0
+    col = x0 + 16
+    col2 = x0 + 300
+
+    # ---- doors, left half ------------------------------------------------
+    cols = [("MARK", 0, "start"), ("DESCRIPTION", 22, "start"),
+            ("W x H mm", 150, "start"), ("FIRE", 196, "start"),
+            ("LOCATION", 226, "start"), ("No.", W, "end")]
+    rows = [(d["mark"], d["description"],
+             "%d x %d" % (d["width_mm"], d["height_mm"]),
+             d["fire"], d["use"], str(d["count"])) for d in doors]
+    yy = _table(s, col, y0 + 20, W, cols, rows, "DOOR SCHEDULE")
+    s.line(col, yy - 4.4, col + W, yy - 4.4, w="thin", color=INK)
+    s.text(col, yy, "TOTAL DOORS", 2.6, "start", INK, "700")
+    s.text(col + W, yy, str(tot["doors"]), 3.0, "end", INK, "700")
+    yy += 18
+
+    levels = [lv.name for lv in project.massing.levels]
+    yy = _matrix(s, col, yy, W, "DOORS BY LEVEL", levels,
+                 OP.door_matrix(project),
+                 "Each stair core carries one FD60S pair and one FD30S "
+                 "single at every level.")
+    yy += 10
+
+    s.text(col, yy, "IRONMONGERY SETS", 3.0, "start", GREY, "700", spacing=1.4)
+    s.line(col, yy + 3.6, col + W, yy + 3.6, w="med", color=INK)
+    yy += 11
+    marks = set(d["mark"] for d in doors)
+    for (iset, mark, desc) in IRONMONGERY:
+        if mark not in marks:
+            continue
+        s.text(col, yy, iset, 2.4, "start", INK, "600")
+        s.text(col + 24, yy, mark, 2.4, "start", GREY, "600")
+        s.text(col + 46, yy, desc, 2.4, "start", GREY)
+        s.line(col, yy + 2.2, col + W, yy + 2.2, w="hatch", color=LIGHT)
+        yy += 6.4
+    yy += 16
+
+    s.text(col, yy, "DOOR TYPES", 3.0, "start", GREY, "700", spacing=1.4)
+    s.line(col, yy + 3.6, col + W, yy + 3.6, w="med", color=INK)
+    yy += 22
+
+    def _one_door(sh, gx, base, d, k):
+        _door_glyph(sh, gx, base, d["width_mm"], d["height_mm"],
+                    d["width_mm"] > 1200, k)
+        sh.text(gx, base + 12, d["mark"], 3.0, "start", INK, "700")
+        sh.text(gx, base + 17, d["description"][:26], 2.0, "start", GREY)
+        sh.text(gx, base + 21.5,
+                d["fire"] if d["fire"] != "—" else "no rating", 2.0, "start",
+                GREY)
+        sh.text(gx, base + 26, "%d no." % d["count"], 2.0, "start", INK, "600")
+
+    yy = _glyph_row(s, col, yy, W, doors, _one_door)
+
+    # ---- windows, right half ---------------------------------------------
+    cols2 = [("MARK", 0, "start"), ("TYPE", 22, "start"),
+             ("W x H mm", 132, "start"), ("GLAZING", 178, "start"),
+             ("No.", W, "end")]
+    rows2 = [(w["mark"], w["type"], "%d x %d" % (w["width_mm"], w["height_mm"]),
+              w["glazing"], str(w["count"])) for w in wins]
+    yy2 = _table(s, col2, y0 + 20, W, cols2, rows2, "WINDOW SCHEDULE")
+    s.line(col2, yy2 - 4.4, col2 + W, yy2 - 4.4, w="thin", color=INK)
+    s.text(col2, yy2, "TOTAL UNITS", 2.6, "start", INK, "700")
+    s.text(col2 + W, yy2, str(tot["windows"]), 3.0, "end", INK, "700")
+    yy2 += 8
+    s.text(col2, yy2, "GLAZED AREA", 2.6, "start", INK, "700")
+    s.text(col2 + W, yy2, "%s m²" % _sp(tot["glazed_area_m2"]), 3.0, "end",
+           INK, "700")
+    yy2 += 18
+
+    faces = [k for k in ("North", "East", "South", "West")
+             if any(k in c for (_, c) in OP.window_matrix(project))]
+    yy2 = _matrix(s, col2, yy2, W, "UNITS BY ELEVATION", faces,
+                  OP.window_matrix(project),
+                  "Wide bays are glazed as curtain walling and counted by "
+                  "module, not by bay.")
+    yy2 += 10
+
+    facade = G.perimeter(project.massing.footprint().outer) * project.massing.height
+    gia = project.massing.gia()
+    perf = [("Glazing U-value", "1.4 W/m²K whole unit"),
+            ("Centre pane Ug", "1.1 W/m²K, argon filled"),
+            ("Solar factor g", "0.38, body-tinted outer pane"),
+            ("Frame", "Thermally broken aluminium, PPC finish"),
+            ("Acoustic", "Rw 38 dB to the glazed line"),
+            ("Facade area", "%s m²" % _sp(facade)),
+            ("Glazed ratio of facade", "%.1f %%"
+             % (100.0 * tot["glazed_area_m2"] / max(facade, 1.0))),
+            ("Glazed area to GIA", "%.1f %%" % (100.0 * tot["glazed_area_m2"]
+                                                / max(gia, 1.0)))]
+    s.text(col2, yy2, "GLAZING PERFORMANCE", 3.0, "start", GREY, "700",
+           spacing=1.4)
+    s.line(col2, yy2 + 3.6, col2 + W, yy2 + 3.6, w="med", color=INK)
+    yy2 += 11
+    for k, val in perf:
+        s.text(col2, yy2, k, 2.4, "start", GREY)
+        s.text(col2 + W, yy2, val, 2.4, "end", INK, "600")
+        s.line(col2, yy2 + 2.2, col2 + W, yy2 + 2.2, w="hatch", color=LIGHT)
+        yy2 += 6.4
+    yy2 += 16
+
+    s.text(col2, yy2, "WINDOW TYPES", 3.0, "start", GREY, "700", spacing=1.4)
+    s.line(col2, yy2 + 3.6, col2 + W, yy2 + 3.6, w="med", color=INK)
+    yy2 += 22
+
+    def _one_window(sh, gx, base, w, k):
+        _window_glyph(sh, gx, base, w["width_mm"], w["height_mm"],
+                      w["mark"].startswith("CW"), k)
+        sh.text(gx, base + 12, w["mark"], 3.0, "start", INK, "700")
+        sh.text(gx, base + 17, w["type"][:26], 2.0, "start", GREY)
+        sh.text(gx, base + 21.5, w["note"][:30], 2.0, "start", GREY)
+        sh.text(gx, base + 26, "%d no." % w["count"], 2.0, "start", INK, "600")
+
+    yy2 = _glyph_row(s, col2, yy2, W, wins, _one_window)
+
+    # ---- key plan across the foot, bay setting-out above it --------------
+    full = col2 + W - col
+    band_top = max(yy, yy2) + 24
+    band_h = y1 - 30 - band_top
+    if band_h > 66:
+        key_w = full * 0.60
+        _door_key_plan(s, project, 0, col, band_top, key_w, band_h,
+                       "DOOR KEY PLAN — %s" % project.massing.levels[0].name)
+        bx_ = col + key_w + 30
+        _bay_setting_out(s, project, bx_, band_top, full - key_w - 30, band_h,
+                         "TYPICAL FACADE BAY — SETTING OUT")
+
+    s.text(x0 + 16, y1 - 14, "Door positions are taken from the floor plans; "
+           "window counts from the structural bays of each elevation. Change "
+           "the grid and this schedule recounts itself.", 2.4, "start", GREY,
+           italic=True)
+    return s.save(out)

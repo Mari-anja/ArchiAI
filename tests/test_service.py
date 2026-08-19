@@ -219,3 +219,85 @@ def test_roof_plant_stands_on_the_roof():
         assert all(top.contains(q) for q in rf["plant"]), \
             "%s: plant enclosure is off the roof" % name
         assert len(rf["outlets"]) >= 2
+
+
+# --- doors and windows -----------------------------------------------------
+
+def test_every_enclosed_room_gets_a_door():
+    from archiai.engine import openings as OP
+    b = M.Extrusion(FOOTPRINTS["slab"], storeys=3, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="doors"), {"number": "T"})
+    for i in range(3):
+        fp = p.floorplans[i]
+        want = [r for r in fp.rooms if r.cat in OP.ENCLOSED]
+        got = OP.doors(p, i)
+        rooms_served = set(id(d.room) for d in got if d.room is not None)
+        assert len(rooms_served) == len(want), \
+            "level %d: %d rooms, %d served" % (i, len(want), len(rooms_served))
+        # a stair core is served twice: one FD60S pair and one FD30S single
+        cores = [r for r in fp.rooms if r.cat == "core"]
+        assert sum(1 for d in got if d.mark == "D4") == len(cores)
+        assert sum(1 for d in got if d.mark == "D3") >= len(cores)
+
+
+def test_doors_sit_on_the_room_they_serve():
+    from archiai.engine import openings as OP
+    b = M.Extrusion(FOOTPRINTS["courtyard"], storeys=2, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="pos"), {"number": "T"})
+    for d in OP.doors(p, 0):
+        if d.room is None:
+            continue
+        # the door sits on the boundary, so it is within a hair of the ring
+        near = L.nearest_on_ring(d.point, d.room.ring)[3]
+        assert near < 0.05, "door %s is %.3f m off its room" % (d.mark, near)
+        # and its normal points into the room, not out of it
+        inward = (d.point[0] + d.normal[0] * 0.35,
+                  d.point[1] + d.normal[1] * 0.35)
+        assert G.point_in_ring(inward, d.room.ring), \
+            "door %s swings out of its room" % d.mark
+
+
+def test_window_counts_match_the_bays_and_the_glazed_area():
+    from archiai.engine import openings as OP
+    b = M.Extrusion(FOOTPRINTS["slab"], storeys=4, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="win"), {"number": "T"})
+    wins = OP.windows(p)
+    assert wins, "no windows derived"
+    tot = OP.totals(p)
+    assert tot["windows"] == sum(w["count"] for w in wins)
+    # the schedule area must equal the sum of the units it lists
+    area = sum(w["count"] * w["width_mm"] * w["height_mm"] / 1e6 for w in wins)
+    assert abs(area - tot["glazed_area_m2"]) < 0.5
+    # glazing cannot exceed the facade it sits in
+    facade = G.perimeter(b.footprint().outer) * b.height
+    assert 0.05 < tot["glazed_area_m2"] / facade < 0.75
+    # every unit is a buildable size
+    for w in wins:
+        assert 500 <= w["width_mm"] <= 3000
+        assert 600 <= w["height_mm"] <= 4000
+
+
+def test_schedule_matrices_agree_with_the_schedule():
+    from archiai.engine import openings as OP
+    b = M.Extrusion(FOOTPRINTS["hexagon"], storeys=3, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="matrix"), {"number": "T"})
+    ds = {d["mark"]: d["count"] for d in OP.door_schedule(p)}
+    for mark, per_level in OP.door_matrix(p):
+        assert sum(per_level.values()) == ds[mark]
+    ws = {w["mark"]: w["count"] for w in OP.windows(p)}
+    for mark, per_face in OP.window_matrix(p):
+        assert sum(per_face.values()) == ws[mark]
+
+
+def test_door_and_window_sheet_is_produced_for_every_shape():
+    from archiai.engine.draw_schedules import door_window_sheet
+    with tempfile.TemporaryDirectory() as d:
+        for name in ("slab", "courtyard", "hexagon", "ring", "L-shape"):
+            b = M.Extrusion(FOOTPRINTS[name], storeys=2, floor_to_floor=3.9)
+            p = PJ.Project(b, L.Brief(name=name), {"number": "T"})
+            out = os.path.join(d, "%s.svg" % name)
+            door_window_sheet(p, out)
+            svg = open(out).read()
+            assert "DOOR SCHEDULE" in svg and "WINDOW SCHEDULE" in svg
+            assert "DOOR KEY PLAN" in svg
+            assert len(svg) > 8000

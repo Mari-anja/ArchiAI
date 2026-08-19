@@ -189,6 +189,7 @@ def plan_sheet(project, i, out, paper="A1"):
     draw_rooms(s, v, fp)
     s.path(cut_path(v, project.massing.cut(lv.ffl + 1.5)), w="cut", color=INK,
            fill=s.pattern("concrete"), rule="evenodd")
+    draw_doors(s, v, project, i)
     draw_grid(s, v, grid, bx)
     if isinstance(grid, OrthoGrid):
         draw_columns(s, v, grid.columns(lv.plate))
@@ -504,3 +505,66 @@ def elevation_sheet(project, azimuths, out, paper="A1", number="A-200"):
 def _looking(az):
     return {0: "west", 90: "south", 180: "east", 270: "north"}.get(int(az) % 360,
                                                                   "toward the centre")
+
+
+# ---------------------------------------------------------------------------
+# Doors on plan
+# ---------------------------------------------------------------------------
+def draw_doors(s, v, project, i, tag=True):
+    """Door leaf and swing arc for every door on the level.
+
+    A single leaf hinges at one jamb; a double leaf hinges at both and swings
+    to meet in the middle. Drawn at the true clear width so the plan can be
+    measured."""
+    from . import openings as OP
+    for d in OP.doors(project, i):
+        w = d.width
+        tx, ty = -d.normal[1], d.normal[0]
+        half = w / 2.0
+        p = d.point
+        j0 = (p[0] - tx * half, p[1] - ty * half)
+        j1 = (p[0] + tx * half, p[1] + ty * half)
+        s.line(*v.p(*j0), *v.p(*j1), w="fine", color="#ffffff")
+        if d.mark == "D5":                     # automatic slider, no swing
+            _slider(s, v, j0, j1, d.normal, w)
+            if tag:
+                lp = (p[0] + d.normal[0] * w * 0.55,
+                      p[1] + d.normal[1] * w * 0.55)
+                s.text(*v.p(*lp), d.mark, 1.9, "middle", GREY, "600")
+            continue
+        double = d.mark in ("D2", "D4")
+        leaves = ((j0, 1.0), (j1, -1.0)) if double else ((j0, 1.0),)
+        lw = half if double else w
+        for (hinge, sign) in leaves:
+            tip = (hinge[0] + d.normal[0] * lw, hinge[1] + d.normal[1] * lw)
+            s.line(*v.p(*hinge), *v.p(*tip), w="thin", color=INK)
+            far = (hinge[0] + tx * sign * lw, hinge[1] + ty * sign * lw)
+            _swing(s, v, hinge, tip, far, lw)
+        if tag:
+            lp = (p[0] + d.normal[0] * w * 0.62, p[1] + d.normal[1] * w * 0.62)
+            s.text(*v.p(*lp), d.mark, 1.9, "middle", GREY, "600")
+
+
+def _slider(s, v, j0, j1, n, w):
+    """Two leaves parked to either side, with the direction of travel shown."""
+    off = (n[0] * 0.10, n[1] * 0.10)
+    mid = ((j0[0] + j1[0]) / 2.0, (j0[1] + j1[1]) / 2.0)
+    for (a, b) in ((j0, mid), (mid, j1)):
+        s.line(*v.p(a[0] + off[0], a[1] + off[1]),
+               *v.p(b[0] + off[0], b[1] + off[1]), w="thin", color=INK)
+    ax, ay = v.p(*j0)
+    bx, by = v.p(*j1)
+    s.line(ax, ay, bx, by, w="fine", color=GREY, dash="3,1.6")
+
+
+def _swing(s, v, hinge, tip, far, r):
+    """Quarter-circle from the open leaf round to the closed position."""
+    hx, hy = v.p(*hinge)
+    ax, ay = v.p(*tip)
+    bx, by = v.p(*far)
+    rr = v.mm(r)
+    cross = ((ax - hx) * (by - hy) - (ay - hy) * (bx - hx))
+    sweep = 1 if cross > 0 else 0
+    s.path("M %s %s A %s %s 0 0 %d %s %s" % (f(ax), f(ay), f(rr), f(rr),
+                                             sweep, f(bx), f(by)),
+           w="fine", color=GREY, dash="3,1.6")

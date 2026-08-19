@@ -74,6 +74,8 @@ class Project:
                 self.default_cuts())
             add("A-700", "Area Schedule and Accommodation", "—",
                 DSC.schedule_sheet, self)
+            add("A-710", "Door and Window Schedule", "—",
+                DSC.door_window_sheet, self)
             add("A-800", "Axonometric and Assembly", "NTS", DSC.axo_sheet, self)
 
         if "structure" in want:
