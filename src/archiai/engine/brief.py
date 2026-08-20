@@ -42,6 +42,12 @@ ACCOMMODATION = {
         ("Meeting", 0.10, "meet"), ("Amenity", 0.08, "amenity"),
         ("Plant and stores", 0.12, "plant"),
     ],
+    "hotel": [
+        ("Guest room", 0.66, "work"), ("Restaurant and bar", 0.09, "amenity"),
+        ("Lobby and reception", 0.05, "recep"),
+        ("Meeting and events", 0.06, "meet"),
+        ("Back of house", 0.07, "plant"), ("Plant and stores", 0.07, "plant"),
+    ],
 }
 
 # What goes in the middle of a deep plan, where there is no window. These are
@@ -70,6 +76,11 @@ INTERNAL = {
         ("Meeting room", 0.18, "meet"), ("Plant and risers", 0.24, "plant"),
         ("Server and comms", 0.12, "plant"),
     ],
+    "hotel": [
+        ("Housekeeping and linen", 0.26, "plant"),
+        ("Plant and risers", 0.26, "plant"), ("Lift lobby", 0.18, "recep"),
+        ("Store", 0.16, "plant"), ("Staff WC", 0.14, "plant"),
+    ],
 }
 
 USE_DEFAULTS = {
@@ -78,7 +89,18 @@ USE_DEFAULTS = {
     "residential": dict(f2f=3.10, daylight=6.5, room_w=6.6, corridor=1.8),
     "gallery":     dict(f2f=5.20, daylight=9.0, room_w=9.6, corridor=3.0),
     "laboratory":  dict(f2f=4.20, daylight=8.0, room_w=7.8, corridor=2.6),
+    # A guest room is a narrow bay off a double-loaded corridor, which is why
+    # a hotel plans nothing like an office of the same floor area.
+    "hotel":       dict(f2f=3.30, daylight=6.2, room_w=4.0, corridor=1.8),
 }
+
+# A use is only usable if all three tables know it. Catching that here means
+# a half-added use fails on import, not halfway through planning a building.
+_missing = [u for u in USE_DEFAULTS
+            if u not in ACCOMMODATION or u not in INTERNAL]
+if _missing:
+    raise RuntimeError("these uses are only half defined: %s"
+                       % ", ".join(sorted(_missing)))
 
 SHAPES = {
     "courtyard": "courtyard", "court": "courtyard", "atrium": "courtyard",
@@ -89,6 +111,13 @@ SHAPES = {
     "tower": "tower", "hexagonal": "hex", "hexagon": "hex",
     "triangular": "tri", "octagonal": "oct",
 }
+
+# Building types someone will reasonably ask for that it does not plan yet.
+# Naming them back is the difference between an assumption and a silence.
+UNPLANNED = ("hospital", "clinic", "airport", "station", "stadium", "arena",
+             "car park", "carpark", "warehouse", "factory", "church",
+             "mosque", "synagogue", "temple", "theatre", "theater", "cinema",
+             "prison", "data centre", "data center", "farm", "hangar")
 
 COMPASS = {"north": 90.0, "south": 270.0, "east": 0.0, "west": 180.0,
            "north-east": 45.0, "north-west": 135.0,
@@ -137,6 +166,7 @@ def parse(text):
 
     for word, use in (("office", "office"), ("workplace", "office"),
                       ("school", "school"), ("college", "school"),
+                      ("hotel", "hotel"), ("hostel", "hotel"),
                       ("apartment", "residential"), ("housing", "residential"),
                       ("residential", "residential"), ("flats", "residential"),
                       ("gallery", "gallery"), ("museum", "gallery"),
@@ -145,7 +175,16 @@ def parse(text):
             spec.use = use
             break
     else:
-        spec.assume("Use not stated; assumed office.")
+        # Saying "use not stated" when it plainly was is the wrong answer. If
+        # a building type it cannot plan has been named, say which, and say
+        # what it drew instead.
+        named = next((u for u in UNPLANNED if u in t), None)
+        if named:
+            spec.assume("It cannot plan a %s yet, so this is laid out as an "
+                        "office. The drawings are real; the room mix is not "
+                        "the right one." % named)
+        else:
+            spec.assume("Use not stated; assumed office.")
 
     m = re.search(r"(\d+)[-\s]*(?:storey|storeys|story|stories|floor|floors|levels?)", t)
     if m:

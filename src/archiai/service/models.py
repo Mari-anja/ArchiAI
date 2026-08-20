@@ -226,6 +226,7 @@ class GenerateRequest(_Inputs):
 
 class ParseRequest(BaseModel):
     brief: str
+    disciplines: Optional[List[str]] = None
 
 
 class ParseResponse(BaseModel):

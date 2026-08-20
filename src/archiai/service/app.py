@@ -97,12 +97,29 @@ def health():
     return {"status": "ok", "engine": EX.ENGINE_VERSION, **settings.describe()}
 
 
+@app.get("/v1/vocabulary")
+def vocabulary():
+    """What the engine can actually be asked for.
+
+    A menu written by hand drifts from the engine behind it and starts
+    offering buildings it cannot plan, so the menu is read from here."""
+    return {
+        "uses": sorted(B.USE_DEFAULTS),
+        "shapes": sorted(set(B.SHAPES.values())),
+        "shape_words": sorted(B.SHAPES),
+        "unplanned": sorted(B.UNPLANNED),
+        "compass": B.COMPASS,
+        "max_storeys": settings.max_storeys,
+        "max_area_m2": settings.max_area,
+    }
+
+
 @app.post("/v1/parse", response_model=ParseResponse)
 def parse(req: ParseRequest, _=Depends(require_key)):
     """Read a brief without generating anything. Free, and safe to call on
     every keystroke so the UI can show what was understood before committing."""
     spec = B.parse(req.brief)
-    sheets = spec.storeys + 3
+    sheets = gen.estimate_sheets(spec.storeys, req.disciplines)
     return ParseResponse(
         spec={"use": spec.use, "shape": spec.shape, "storeys": spec.storeys,
               "area_m2": spec.area, "entrance_azimuth": spec.entrance,

@@ -14,9 +14,40 @@ function mode(m) {
   document.querySelectorAll(".tabs button").forEach(b =>
     b.setAttribute("aria-selected", b.dataset.mode === m));
   for (const k of ["brief", "draw", "image"]) $("#m-" + k).hidden = k !== m;
+  // In Describe mode the words decide everything, so these show what was read
+  // rather than pretending to be settings that are quietly ignored.
+  const readout = m === "brief";
+  $("#fields").classList.toggle("readout", readout);
+  $("#fieldnote").textContent = readout
+    ? "Read from your description — change the words above, not these."
+    : "Set these yourself for a drawn or uploaded outline.";
 }
+mode("brief");
 
 function ex(btn) { $("#brief").value = btn.textContent.trim(); parse(); }
+
+// --- what the engine can be asked for --------------------------------------
+// Read from the engine rather than written here, so the menus cannot come to
+// offer a building it has no idea how to plan.
+let VOCAB = null;
+const USE_WORDS = { residential: "homes / apartments", gallery: "gallery / museum" };
+
+async function vocabulary() {
+  try {
+    VOCAB = await (await fetch("/v1/vocabulary")).json();
+  } catch (e) { return; }
+  const u = $("#use");
+  u.innerHTML = VOCAB.uses.map(
+    v => `<option value="${v}">${USE_WORDS[v] || v}</option>`).join("");
+  u.value = "office";
+  const e = $("#entrance");
+  e.innerHTML = Object.entries(VOCAB.compass)
+    .filter(([k]) => k.length > 2 && !k.includes("-"))
+    .map(([k, deg]) => `<option value="${deg}">${k}</option>`).join("");
+  e.value = "270";
+  $("#storeys").max = VOCAB.max_storeys;
+}
+vocabulary();
 
 // --- describe ---------------------------------------------------------------
 let parseTimer = null;
@@ -33,7 +64,8 @@ async function parse() {
   try {
     const r = await fetch("/v1/parse", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ brief })
+      body: JSON.stringify({
+        brief, disciplines: $("#disciplines").value ? [$("#disciplines").value] : null })
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || "could not read that");
@@ -46,6 +78,11 @@ async function parse() {
     box.innerHTML = html;
     $("#storeys").value = s.storeys;
     if (s.use) $("#use").value = s.use;
+    if (s.entrance_azimuth != null) {
+      const deg = String(Math.round(s.entrance_azimuth));
+      if ([...$("#entrance").options].some(o => o.value === deg))
+        $("#entrance").value = deg;
+    }
   } catch (e) {
     box.classList.add("err");
     box.textContent = e.message;
@@ -251,7 +288,7 @@ function show(d, ms, changes) {
       ${pdf ? `<a href="${pdf.url}" target="_blank">Download the PDF (${sheetCount(pdf)} pages)</a>` : ""}
     </div>
     <div class="gal">
-      ${views.map(v => `<a href="${v.url}" target="_blank">
+      ${views.map((v, i) => `<a href="#" onclick="return jump('view',${i})">
          <img src="${v.url}" alt="${v.title}"><small>${v.title}</small></a>`).join("")}
     </div>
     <div class="edit">
@@ -266,10 +303,162 @@ function show(d, ms, changes) {
       </div>
       <div class="note" id="rev-note" hidden></div>
     </div>
-    <div class="sheets">
-      ${sheets.map(s => `<div><span>${s.number}</span>${s.title}</div>`).join("")}
+    <div class="browse">
+      <div class="bnav">
+        <div class="seg">
+          <button data-kind="drawing" aria-selected="true" onclick="showKind('drawing')">
+            Drawings (${sheets.length})</button>
+          ${views.length ? `<button data-kind="view" aria-selected="false"
+            onclick="showKind('view')">Views (${views.length})</button>` : ""}
+        </div>
+        <div class="blist" id="blist"></div>
+      </div>
+      <div class="bview">
+        <div class="bbar">
+          <b id="b-title">—</b><em id="b-scale"></em>
+          <span class="sp"></span>
+          <button onclick="step(-1)" title="Previous (←)">‹</button>
+          <button onclick="step(1)" title="Next (→)">›</button>
+          <button class="wide" onclick="zoom(-1)">−</button>
+          <button class="wide" onclick="fit()">Fit</button>
+          <button class="wide" onclick="zoom(1)">+</button>
+          <button class="wide" onclick="openSheet()" title="Open in a new tab">↗</button>
+        </div>
+        <div class="stage" id="stage"><img id="b-img" alt=""></div>
+      </div>
     </div>`;
+  // Changing your mind is for seeing the same drawing again, changed, so the
+  // rebuild lands back on the sheet that was open rather than the cover.
+  const was = HELD;
+  SHOWN = sheets.concat(views);
+  showKind(was ? was.kind : "drawing");
+  if (was) {
+    const i = inKind().findIndex(a => a.number === was.number);
+    if (i >= 0) pick(i);
+  }
 }
+
+// --- looking through the set -----------------------------------------------
+// The drawings are the point, so they are read here rather than in another
+// tab: a list on the left, one sheet on the right, and the arrow keys.
+let SHOWN = [], KIND = "drawing", AT = 0, Z = 1, PX = 0, PY = 0;
+let HELD = null;                     // the sheet open across a rebuild
+
+const DISC = { A: "Architecture", S: "Structure", E: "Electrical",
+               M: "Mechanical", P: "Public health", F: "Fire" };
+
+function inKind() { return SHOWN.filter(a => a.kind === KIND); }
+
+function showKind(kind) {
+  KIND = kind; AT = 0;
+  document.querySelectorAll(".seg button").forEach(
+    b => b.setAttribute("aria-selected", String(b.dataset.kind === kind)));
+  const list = inKind();
+  let html = "", group = null;
+  list.forEach((a, i) => {
+    const g = kind === "view" ? "Views"
+            : (DISC[(a.number || "")[0]] || "Other");
+    if (g !== group) { html += `<h3>${g}</h3>`; group = g; }
+    html += `<button data-i="${i}" onclick="pick(${i})">
+               <span>${a.number || ""}</span>${a.title}</button>`;
+  });
+  $("#blist").innerHTML = html || "<h3>Nothing here</h3>";
+  if (list.length) pick(0);
+}
+
+function pick(i) {
+  const list = inKind();
+  if (!list.length) return;
+  AT = Math.max(0, Math.min(i, list.length - 1));
+  const a = list[AT];
+  HELD = { kind: KIND, number: a.number };
+  $("#b-title").textContent = a.title;
+  $("#b-scale").textContent = (a.meta && a.meta.scale) ? "  " + a.meta.scale : "";
+  const img = $("#b-img");
+  img.onload = fit;
+  img.src = a.url;
+  document.querySelectorAll("#blist button").forEach(
+    b => b.setAttribute("aria-current", String(+b.dataset.i === AT)));
+  const cur = document.querySelector('#blist button[aria-current=true]');
+  if (cur) cur.scrollIntoView({ block: "nearest" });
+}
+
+function step(d) { pick(AT + d); }
+
+function jump(kind, i) {
+  showKind(kind); pick(i);
+  document.querySelector(".browse").scrollIntoView({ behavior: "smooth",
+                                                    block: "start" });
+  return false;
+}
+function openSheet() { const a = inKind()[AT]; if (a) window.open(a.url, "_blank"); }
+
+function place() {
+  const img = $("#b-img");
+  img.style.transform = `translate(${PX}px,${PY}px) scale(${Z})`;
+}
+
+function fit() {
+  const img = $("#b-img"), st = $("#stage");
+  if (!img || !img.naturalWidth) return;
+  img.style.width = img.naturalWidth + "px";
+  img.style.height = img.naturalHeight + "px";
+  const pad = 24;
+  Z = Math.min((st.clientWidth - pad) / img.naturalWidth,
+               (st.clientHeight - pad) / img.naturalHeight);
+  PX = (st.clientWidth - img.naturalWidth * Z) / 2;
+  PY = (st.clientHeight - img.naturalHeight * Z) / 2;
+  place();
+}
+
+function zoom(dir, ox, oy) {
+  const st = $("#stage");
+  if (!st) return;
+  const k = dir > 0 ? 1.25 : 1 / 1.25;
+  const cx = ox === undefined ? st.clientWidth / 2 : ox;
+  const cy = oy === undefined ? st.clientHeight / 2 : oy;
+  const next = Math.max(0.05, Math.min(24, Z * k));
+  PX = cx - (cx - PX) * (next / Z);
+  PY = cy - (cy - PY) * (next / Z);
+  Z = next;
+  place();
+}
+
+document.addEventListener("keydown", e => {
+  if (!SHOWN.length || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  if (e.key === "ArrowRight" || e.key === "ArrowDown") { step(1); e.preventDefault(); }
+  if (e.key === "ArrowLeft" || e.key === "ArrowUp") { step(-1); e.preventDefault(); }
+  if (e.key === "0") fit();
+  if (e.key === "+" || e.key === "=") zoom(1);
+  if (e.key === "-") zoom(-1);
+});
+
+document.addEventListener("wheel", e => {
+  const st = e.target.closest && e.target.closest("#stage");
+  if (!st) return;
+  e.preventDefault();
+  const r = st.getBoundingClientRect();
+  zoom(e.deltaY < 0 ? 1 : -1, e.clientX - r.left, e.clientY - r.top);
+}, { passive: false });
+
+document.addEventListener("pointerdown", e => {
+  const st = e.target.closest && e.target.closest("#stage");
+  if (!st) return;
+  st.classList.add("drag");
+  st.setPointerCapture(e.pointerId);
+  let lx = e.clientX, ly = e.clientY;
+  const move = m => { PX += m.clientX - lx; PY += m.clientY - ly;
+                      lx = m.clientX; ly = m.clientY; place(); };
+  const up = () => { st.classList.remove("drag");
+                     st.removeEventListener("pointermove", move);
+                     st.removeEventListener("pointerup", up);
+                     st.removeEventListener("pointercancel", up); };
+  st.addEventListener("pointermove", move);
+  st.addEventListener("pointerup", up);
+  st.addEventListener("pointercancel", up);
+});
+
+window.addEventListener("resize", () => { if ($("#b-img") && $("#b-img").src) fit(); });
 function sheetCount(pdf) { return (pdf.meta && pdf.meta.pages) || "?"; }
 
 async function revise(changes) {

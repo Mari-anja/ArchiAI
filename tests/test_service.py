@@ -1565,3 +1565,119 @@ def test_solidity_and_raggedness_tell_a_plan_from_a_mess():
     lsh = G.l_shape(40, 30, 20, 15)
     assert 0.5 < G.solidity(lsh) < 0.95
     assert G.raggedness(lsh) > G.raggedness(ring)
+
+
+# --- asking for it in your own words ----------------------------------------
+
+def test_a_hotel_plans_like_a_hotel_and_not_like_an_office():
+    """A guest room is a narrow bay, not a slice of open floor."""
+    spec = B.parse("a 5 storey hotel of 7000 m2 with a courtyard")
+    assert spec.use == "hotel"
+    assert not any("Use not stated" in a for a in spec.assumptions)
+
+    rooms = {}
+    for use in ("hotel", "office"):
+        s = B.parse("a 5 storey %s of 7000 m2 with a courtyard" % use)
+        massing, brf = B.build(s)
+        p = PJ.Project(massing, brf)
+        fp = p.floorplans[2]
+        named = [r for r in fp.rooms if r.cat == "work"]
+        rooms[use] = sum(r.area for r in named) / len(named)
+        assert massing.height > 0
+
+    # a guest room is 25-40 m2; an office floorplate is cut far coarser
+    assert 22.0 < rooms["hotel"] < 45.0, rooms
+    assert rooms["office"] > rooms["hotel"] * 1.4, rooms
+
+
+def test_a_use_it_cannot_plan_is_named_rather_than_silently_swapped():
+    """Saying "use not stated" when it plainly was is the wrong answer."""
+    spec = B.parse("a 4 storey hospital of 9000 m2")
+    assert spec.use == "office"
+    said = " ".join(spec.assumptions)
+    assert "hospital" in said and "office" in said
+    assert "Use not stated" not in said        # it was stated; it is not planned
+
+    # and a brief that really says nothing still gets the honest version
+    assert any("Use not stated" in a
+               for a in B.parse("a 3 storey building of 2000 m2").assumptions)
+
+
+def test_every_use_the_engine_offers_can_be_planned_end_to_end():
+    """A half-added use must not reach a person as a KeyError."""
+    for use in sorted(B.USE_DEFAULTS):
+        assert use in B.ACCOMMODATION and use in B.INTERNAL, use
+        spec = B.Spec(use=use, storeys=2, area=2400.0, floor_to_floor=3.6)
+        massing, brf = B.build(spec)
+        p = PJ.Project(massing, brf)
+        assert p.floorplans[0].rooms, use
+        with tempfile.TemporaryDirectory() as d:
+            assert p.build(d, disciplines=["architecture"]), use
+
+
+def test_the_page_reads_its_menus_from_the_engine():
+    """A hand-written menu drifts and starts offering the impossible."""
+    v = client.get("/v1/vocabulary").json()
+    assert set(v["uses"]) == set(B.USE_DEFAULTS)
+    assert "warehouse" not in v["uses"] and "warehouse" in v["unplanned"]
+    assert v["max_storeys"] >= 1 and v["max_area_m2"] > 0
+
+    # every use it offers is one /v1/generate will actually accept
+    for use in v["uses"]:
+        r = client.post("/v1/generate", json={
+            "spec": {"use": use, "storeys": 2, "area_m2": 2400},
+            "disciplines": ["architecture"], "include_pdf": False,
+            "include_page": False, "turntable": 0, "views": []})
+        assert r.status_code == 200, (use, r.json())
+
+    # and the page does not hard-code a list of its own
+    js = client.get("/playground.js").text
+    assert "/v1/vocabulary" in js
+    html = client.get("/").text
+    assert "warehouse" not in html and "apartments" not in html
+
+
+def test_the_estimate_of_size_matches_what_is_actually_drawn():
+    """Being told "about 8 sheets" and getting 21 is not an estimate."""
+    from archiai.service import generate as GEN
+    for storeys in (1, 5, 20):
+        said = client.post("/v1/parse", json={
+            "brief": "a %d storey office of %d m2" % (storeys, 900 * storeys),
+            "disciplines": ["architecture"]}).json()["estimated_sheets"]
+        got = GEN.estimate_sheets(storeys, ["architecture"])
+        assert said == got
+
+    r = client.post("/v1/generate", json={
+        "brief": "a 5 storey office of 4500 m2", "disciplines": ["architecture"],
+        "include_pdf": False, "include_page": False, "turntable": 0, "views": []})
+    drawn = len([a for a in r.json()["assets"] if a["kind"] == "drawing"])
+    said = client.post("/v1/parse", json={
+        "brief": "a 5 storey office of 4500 m2",
+        "disciplines": ["architecture"]}).json()["estimated_sheets"]
+    assert abs(drawn - said) <= 2, (drawn, said)
+
+
+def test_the_drawings_can_be_read_without_leaving_the_page():
+    """Fifty sheets listed by name is a filing cabinet, not a drawing set."""
+    code = client.get("/playground.js").text
+    # a list to choose from, one sheet shown, and a way to move around it
+    for bit in ("#blist", "#b-img", "function pick(", "function fit(",
+                "function zoom(", "function step(", "showKind("):
+        assert bit in code, "the sheet browser has no %s" % bit
+    # arrow keys, the wheel, and dragging
+    for bit in ("ArrowRight", "wheel", "pointerdown"):
+        assert bit in code, "%s does nothing" % bit
+    # and changing your mind keeps you on the drawing you were reading
+    assert "HELD" in code and "was.number" in code
+
+    html = client.get("/").text
+    for bit in ("browse", "blist", "stage", "bview"):
+        assert bit in html, "the browser has no %s in its markup" % bit
+
+
+def test_the_page_shows_what_it_read_rather_than_settings_it_ignores():
+    """In Describe mode the words decide, so the boxes must say so."""
+    code = client.get("/playground.js").text
+    assert 'readout' in code and 'change the words above' in code
+    # the brief is what is sent; the boxes are not smuggled in beside it
+    assert "return { brief, ...strip(b) };" in code

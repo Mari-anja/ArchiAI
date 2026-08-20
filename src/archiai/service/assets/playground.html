@@ -38,6 +38,9 @@ label{display:block;font-size:11px;letter-spacing:.7px;text-transform:uppercase;
 canvas{width:100%;height:230px;border:1px dashed var(--line);border-radius:8px;
   background:#fcfcfb;display:block;cursor:crosshair;touch-action:none}
 .hint{color:var(--grey);font-size:12px;margin-top:6px}
+.fieldnote{margin-top:14px;font-size:11.5px;color:var(--grey);font-style:italic}
+#fields.readout input,#fields.readout select{background:#f4f5f6;color:var(--grey);
+  pointer-events:none}
 .note{font-size:12px;color:var(--grey);background:#fafaf9;border:1px solid var(--line);
   border-radius:7px;padding:8px 10px;margin-top:10px}
 .note b{color:var(--ink)}
@@ -63,11 +66,43 @@ canvas{width:100%;height:230px;border:1px dashed var(--line);border-radius:8px;
 .edit{margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
 .edit .chips button{border-color:#cfe0ff;color:var(--ink)}
 ul.changes{margin:8px 0 0;padding-left:18px;color:var(--good)}
-.sheets{margin-top:14px;max-height:230px;overflow:auto;border:1px solid var(--line);
-  border-radius:8px}
-.sheets div{padding:5px 11px;border-bottom:1px solid #f0f0ee;font-size:12.5px;
-  display:flex;gap:9px}
-.sheets div span{color:var(--grey);font-variant-numeric:tabular-nums;min-width:56px}
+/* looking through the set without leaving the page */
+.browse{margin-top:14px;border:1px solid var(--line);border-radius:9px;overflow:hidden;
+  display:grid;grid-template-columns:236px 1fr;background:#fff}
+.seg{display:flex;gap:4px;padding:9px;border-bottom:1px solid var(--line);background:#fafaf9}
+.seg button{flex:1;border:1px solid var(--line);background:#fff;border-radius:6px;
+  padding:5px;font:inherit;font-size:12px;cursor:pointer;color:var(--grey)}
+.seg button[aria-selected=true]{background:#eaf1fd;border-color:var(--blue);
+  color:var(--ink);font-weight:600}
+.bnav{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.blist{overflow:auto;flex:1;max-height:600px}
+.blist h3{margin:0;position:sticky;top:0;background:#f2f3f4;color:var(--grey);
+  font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:5px 11px;
+  border-bottom:1px solid var(--line);font-weight:600}
+.blist button{display:flex;gap:8px;width:100%;text-align:left;border:0;background:none;
+  border-bottom:1px solid #f2f2f0;padding:6px 11px;font:inherit;font-size:12.5px;
+  cursor:pointer;color:var(--ink)}
+.blist button:hover{background:#fafaf9}
+.blist button[aria-current=true]{background:#eaf1fd;font-weight:600}
+.blist button span{color:var(--grey);font-variant-numeric:tabular-nums;min-width:52px}
+.blist button[aria-current=true] span{color:var(--blue)}
+.bview{display:flex;flex-direction:column;min-width:0;background:#eceef0}
+.bbar{display:flex;align-items:center;gap:9px;padding:7px 11px;background:#fafaf9;
+  border-bottom:1px solid var(--line);font-size:12.5px}
+.bbar b{font-weight:600}
+.bbar .sp{flex:1}
+.bbar button{border:1px solid var(--line);background:#fff;border-radius:6px;
+  width:26px;height:24px;font:inherit;cursor:pointer;color:var(--grey)}
+.bbar button.wide{width:auto;padding:0 9px}
+.bbar em{color:var(--grey);font-style:normal;font-variant-numeric:tabular-nums}
+.stage{position:relative;overflow:hidden;height:600px;cursor:grab;
+  background:#eceef0 repeating-linear-gradient(45deg,#0000 0 12px,#00000006 12px 24px)}
+.stage.drag{cursor:grabbing}
+.stage img{position:absolute;left:0;top:0;transform-origin:0 0;
+  box-shadow:0 2px 14px #0002;background:#fff;-webkit-user-drag:none;user-select:none}
+@media(max-width:900px){.browse{grid-template-columns:1fr}
+  .bnav{border-right:0;border-bottom:1px solid var(--line)}
+  .blist{max-height:190px}.stage{height:420px}}
 .spin{display:inline-block;width:13px;height:13px;border:2px solid #fff;
   border-top-color:transparent;border-radius:50%;animation:s .7s linear infinite;
   vertical-align:-2px;margin-right:7px}
@@ -121,22 +156,18 @@ ul.changes{margin:8px 0 0;padding-left:18px;color:var(--good)}
       <input id="area_m2" type="number" value="2000" min="40" max="50000">
     </section>
 
-    <div class="row">
+    <div class="fieldnote" id="fieldnote">Read from your description — change the
+      words above, not these.</div>
+    <div class="row" id="fields">
       <div><label>Storeys</label><input id="storeys" type="number" value="4" min="1" max="40"></div>
       <div><label>Use</label>
-        <select id="use">
-          <option>office</option><option>school</option><option>gallery</option>
-          <option>apartments</option><option>hotel</option><option>warehouse</option>
-        </select></div>
+        <select id="use"><option>office</option></select></div>
     </div>
     <div class="row">
       <div><label>Entrance faces</label>
-        <select id="entrance">
-          <option value="270">south</option><option value="90">north</option>
-          <option value="0">east</option><option value="180">west</option>
-        </select></div>
+        <select id="entrance"><option value="270">south</option></select></div>
       <div><label>Drawings</label>
-        <select id="disciplines">
+        <select id="disciplines" onchange="parse()">
           <option value="architecture">Architecture only (fast)</option>
           <option value="">Every discipline</option>
         </select></div>
