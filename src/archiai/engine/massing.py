@@ -318,6 +318,71 @@ class Massing:
 
 
 # ---------------------------------------------------------------------------
+class Support:
+    """One thing standing on the ground: a column, or a core coming down."""
+    __slots__ = ("kind", "region", "centre", "size", "material")
+
+    def __init__(self, kind, region, centre, size, material="concrete"):
+        self.kind, self.region, self.centre = kind, region, centre
+        self.size, self.material = size, material
+
+    def __repr__(self):
+        return "<%s %.0f mm at %.1f, %.1f>" % (self.kind, self.size * 1000,
+                                               self.centre[0], self.centre[1])
+
+
+def _shaft(m, ring, z0, z1, group):
+    r = G.resample(ring, 2.0)
+    n = len(r)
+    for k in range(n):
+        a, b = r[k], r[(k + 1) % n]
+        m.quad((a[0], a[1], z0), (b[0], b[1], z0),
+               (b[0], b[1], z1), (a[0], a[1], z1), group)
+
+
+def piloti(footprint, spacing=8.4, size=0.40, inset=1.2, material="concrete",
+           round_=True):
+    """Columns on a grid, clipped to the footprint they hold up.
+
+    A lifted building is only convincing if the thing holding it up is where
+    the structure would really be, so they sit on the same grid the frame
+    above uses and stop at the edge of the plate."""
+    x0, y0, x1, y1 = footprint.bbox()
+    inner = footprint.offset(-inset) if inset else footprint
+    ring = inner.outer if len(inner.outer) >= 3 else footprint.outer
+    nx = max(2, int(round((x1 - x0) / spacing)))
+    ny = max(2, int(round((y1 - y0) / spacing)))
+    out = []
+    for i in range(nx + 1):
+        for j in range(ny + 1):
+            cx = x0 + (x1 - x0) * i / nx
+            cy = y0 + (y1 - y0) * j / ny
+            if not G.point_in_ring((cx, cy), ring):
+                continue
+            if any(G.point_in_ring((cx, cy), h) for h in footprint.holes):
+                continue
+            sec = (G.circle(size / 2.0, 16, cx, cy) if round_
+                   else G.rectangle(size, size, cx, cy))
+            out.append(Support("column", G.Region(sec), (cx, cy), size, material))
+    return out
+
+
+def core_supports(footprint, count=2, size=7.0):
+    """Cores brought down to the earth, when only they touch it."""
+    x0, y0, x1, y1 = footprint.bbox()
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    span = (x1 - x0)
+    out = []
+    for i in range(max(1, count)):
+        off = (i - (count - 1) / 2.0) * min(span * 0.32, 26.0)
+        p = (cx + off, cy)
+        if not G.point_in_ring(p, footprint.outer):
+            p = (cx + off, cy + (y1 - y0) * 0.28)
+        out.append(Support("core", G.Region(G.rectangle(size, size, p[0], p[1])),
+                           p, size, "concrete"))
+    return out
+
+
 class Extrusion(Massing):
     """A footprint pushed up, optionally with per-level setbacks.
 
@@ -327,9 +392,18 @@ class Extrusion(Massing):
     name = "extrusion"
 
     def __init__(self, footprint, storeys=2, floor_to_floor=4.2, wall_t=0.35,
-                 ground_ffl=0.0, setbacks=None, parapet=1.1, slab_t=0.30):
+                 ground_ffl=0.0, setbacks=None, parapet=1.1, slab_t=0.30,
+                 lift=0.0, columns=None, cores=None):
         self.foot = footprint if isinstance(footprint, G.Region) else G.Region(footprint)
         self.wall_t, self.parapet, self.f2f = wall_t, parapet, floor_to_floor
+        # A building can be held above an open ground plane. Everything above
+        # the lift is unchanged; below it there is nothing but what carries it.
+        self.lift = max(0.0, float(lift or 0.0))
+        self.columns = list(columns or []) if self.lift else []
+        self.cores = list(cores or []) if self.lift else []
+        if self.lift and not self.columns:
+            self.columns = piloti(self.foot)
+        ground_ffl = ground_ffl + self.lift
         setbacks = setbacks or {}
         levels = []
         for i in range(storeys):
@@ -343,8 +417,20 @@ class Extrusion(Massing):
             Zone("EX-GL", "glazing", ground_ffl, self.top, "Facade glazing"),
             Zone("EX-RF", "roof", self.top, self.top + parapet, "Roof and parapet"),
         ]
+        if self.lift:
+            self.zones.insert(0, Zone("EX-PI", "structure", 0.0, self.lift,
+                                      "Open ground plane on columns"))
+
+    def undercroft(self):
+        """What stands on the ground when the building does not."""
+        return [c.region for c in self.columns] + [c.region for c in self.cores]
 
     def cut(self, z):
+        # Below the lift the plan is the columns and the cores, which is what
+        # makes the ground floor read as open rather than as a missing storey.
+        if self.lift and z < self.lift - 1e-9:
+            bands = [G.Band(r, G.Region([])) for r in self.undercroft()]
+            return bands or [self.levels[0].band(self.wall_t)]
         for lv in reversed(self.levels):
             if z >= lv.ffl - 1e-9:
                 return lv.band(self.wall_t)
@@ -352,6 +438,13 @@ class Extrusion(Massing):
 
     def build_mesh(self):
         m = Mesh()
+        for c in self.columns + self.cores:
+            _shaft(m, c.region.outer, 0.0, self.lift,
+                   "column" if c in self.columns else "core")
+        if self.lift:                       # the underside people stand beneath
+            base = self.levels[0].plate
+            m.face(m.add([(x, y, self.lift) for (x, y)
+                          in G.resample(base.outer, 4.0)][::-1]), "soffit")
         for i, lv in enumerate(self.levels):
             z0 = lv.ffl
             z1 = (self.levels[i + 1].ffl if i + 1 < len(self.levels)
@@ -368,7 +461,8 @@ class Extrusion(Massing):
         return m
 
     def joint_heights(self):
-        return [lv.ffl for lv in self.levels if lv.ffl > 1e-6] + [self.top]
+        h = [lv.ffl for lv in self.levels if lv.ffl > 1e-6] + [self.top]
+        return ([0.0, self.lift] + h) if self.lift else h
 
 
 # ---------------------------------------------------------------------------

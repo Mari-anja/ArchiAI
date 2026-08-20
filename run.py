@@ -4,10 +4,12 @@
     python3 run.py                       open the page in a browser
     python3 run.py "a 6 storey office of 11000 m2 with a courtyard"
 
-The first form needs four packages; if they are missing this offers to put
+The first form needs a few packages; if they are missing this offers to put
 them in a .venv inside this folder and start again, so nothing is installed
 anywhere else on the machine. The second form needs nothing at all -- the
 engine itself is standard library Python.
+
+Set ANTHROPIC_API_KEY to have briefs read as prose rather than by keyword.
 """
 
 import os
@@ -17,7 +19,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "src")
 VENV = os.path.join(HERE, ".venv")
-NEEDS = ["fastapi", "uvicorn", "pydantic"]
+NEEDS = ["fastapi", "uvicorn", "pydantic", "anthropic"]
 
 
 def venv_python():
@@ -36,10 +38,10 @@ def have(mods):
 
 
 def setup_and_restart():
-    """Make a .venv here, install the four packages into it, and re-run."""
+    """Make a .venv here, install what the page needs, and re-run."""
     py = venv_python()
     if not os.path.isfile(py):
-        print("The page needs four packages: fastapi, uvicorn, pydantic, httpx.")
+        print("The page needs a few packages: fastapi, uvicorn, pydantic,\nhttpx and anthropic.")
         print("They can go in a folder called .venv inside this project, so")
         print("nothing else on your computer is touched.")
         try:

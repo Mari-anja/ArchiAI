@@ -59,6 +59,9 @@ class Project:
 
         if "architecture" in want:
             add("A-010", "Site Plan", "1:500", DSC.site_sheet, self)
+            if getattr(self.massing, "lift", 0.0):
+                add("A-090", "Ground Level — Open Plane", "1:150",
+                    draw.ground_plane_sheet, self)
             for i, lv in enumerate(self.massing.levels):
                 add("A-1%02d" % i, "%s — Floor Plan" % lv.name, "1:150",
                     draw.plan_sheet, self, i)

@@ -1681,3 +1681,160 @@ def test_the_page_shows_what_it_read_rather_than_settings_it_ignores():
     assert 'readout' in code and 'change the words above' in code
     # the brief is what is sent; the boxes are not smuggled in beside it
     assert "return { brief, ...strip(b) };" in code
+
+
+# --- reading a brief the way a person writes one ----------------------------
+
+BRIEF = ("A monumental structure appears to hover above the ground on a forest "
+         "of extremely thin mirrored columns. The entire ground floor is open "
+         "to nature, planted and walkable, with only the lift cores touching "
+         "the earth.")
+
+READING = {
+    "use": "gallery", "use_is_a_stretch": False, "asked_for": "",
+    "storeys": 3, "area_m2": None, "shape": "bar",
+    "entrance": "south", "entrance_stated": False, "floor_to_floor_m": 5.2,
+    "lift_m": 9.0,
+    "columns": {"spacing_m": 6.0, "diameter_mm": 180, "shape": "round",
+                "material": "mirror"},
+    "cores_to_ground": 2, "ground": "planted", "facade": "mirror",
+    "setback_m": 0.0, "name": "Hovering Pavilion",
+    "intent": "A mass held clear of a landscape that runs on beneath it.",
+    "unreadable": ["a mirrored soffit reflecting the planting"],
+}
+
+
+def test_the_keyword_parser_is_deaf_to_how_people_write_briefs():
+    """The reason the reader exists, kept in front of us."""
+    spec = B.parse(BRIEF)
+    assert spec.shape == "circle"          # from "round" inside "ground"
+    assert spec.lift_m == 0.0
+    # nothing in that brief about being an office, and nothing about a cylinder
+    assert "round" in BRIEF.lower()
+
+
+def test_a_reading_becomes_the_building_the_brief_describes():
+    from archiai.engine import interpret as IN
+    spec = IN.to_spec(READING, BRIEF)
+    assert spec.use == "gallery" and spec.shape == "bar"
+    assert spec.lift_m == 9.0 and spec.cores_to_ground == 2
+    assert spec.columns["diameter_mm"] == 180
+    assert spec.name == "Hovering Pavilion" and spec.intent
+
+    massing, brf = B.build(spec)
+    assert massing.lift == 9.0
+    assert len(massing.columns) > 12          # a forest, not four posts
+    assert len(massing.cores) == 2
+    assert massing.levels[0].ffl == 9.0       # the ground is left open
+    assert all(c.size < 0.30 for c in massing.columns)   # extremely thin
+
+    # and it draws: the whole set, with the undercroft in it
+    p = PJ.Project(massing, brf)
+    with tempfile.TemporaryDirectory() as d:
+        made = p.build(d, disciplines=["architecture"])
+        assert made
+    from archiai.engine import view as V
+    svg = V.render(p, "entrance", width=700, height=440)
+    assert "soffit" not in svg                 # materials are resolved to colour
+    assert len(svg) > 20000
+
+
+def test_what_the_brief_asked_for_and_did_not_get_is_said_out_loud():
+    from archiai.engine import interpret as IN
+    said = " ".join(IN.to_spec(READING, BRIEF).assumptions)
+    assert "mirrored soffit" in said
+    assert "No floor area given" in said
+    assert "Entrance orientation not stated" in said
+
+    stretch = dict(READING, use="office", use_is_a_stretch=True,
+                   asked_for="chapel")
+    said = " ".join(IN.to_spec(stretch, BRIEF).assumptions)
+    assert "chapel" in said and "office" in said
+
+
+def test_the_reader_cannot_ask_for_what_the_engine_cannot_build():
+    """Everything the model says is clamped; it never gets the last word."""
+    from archiai.engine import interpret as IN
+    wild = {
+        "use": "submarine", "shape": "hyperboloid", "storeys": 9999,
+        "area_m2": -5, "entrance": "upwards", "floor_to_floor_m": 400,
+        "lift_m": 900, "cores_to_ground": 99,
+        "columns": {"spacing_m": 0.1, "diameter_mm": 99999, "shape": "blob",
+                    "material": "unobtanium"},
+        "setback_m": 999,
+    }
+    spec = IN.to_spec(wild, "a 4 storey school of 3000 m2")
+    assert spec.use == "school" and spec.shape in set(B.SHAPES.values())
+    assert 1 <= spec.storeys <= 60
+    assert spec.area is None or spec.area > 0
+    assert 0 <= spec.lift_m <= 30
+    assert 3.0 <= spec.columns["spacing_m"] <= 24.0
+    assert 80 <= spec.columns["diameter_mm"] <= 2000
+    assert spec.columns["shape"] in ("round", "square")
+    assert 0 <= spec.cores_to_ground <= 6
+    assert 0 <= spec.setback <= 12
+    B.build(spec)                              # and it still builds
+
+    # a reading that says nothing at all falls back to the words themselves
+    spec = IN.to_spec({}, "a 5 storey hotel of 7000 m2")
+    assert spec.use == "hotel" and spec.storeys == 5
+
+
+def test_a_brief_is_read_by_keyword_when_there_is_no_model_and_says_so():
+    from archiai.engine import interpret as IN
+    spec, how = IN.parse("a 4 storey office of 6000 m2 with a courtyard")
+    assert how in ("model", "keyword")
+    assert spec.use == "office" and spec.storeys == 4
+
+    # the page is told which happened, so nobody is left wondering
+    r = client.post("/v1/parse", json={"brief": "a 3 storey school of 2000 m2"})
+    assert r.status_code == 200
+    assert r.json()["spec"]["read_by"] in ("model", "keyword")
+    assert "reads_prose" in client.get("/v1/vocabulary").json()
+    assert "read_by" in client.get("/playground.js").text
+
+
+def test_a_lifted_building_is_lifted_everywhere_not_just_in_the_render():
+    """A move the drawings do not show is a move that did not happen."""
+    from archiai.engine import massing as M
+    foot = G.Region(G.rectangle(46, 30))
+    m = M.Extrusion(foot, storeys=3, floor_to_floor=4.2, lift=8.0,
+                    columns=M.piloti(foot, spacing=8.0, size=0.2),
+                    cores=M.core_supports(foot, 2))
+    # in plan, below the lift, the floor is columns and cores -- not a slab
+    under = m.bands_at(4.0)
+    assert len(under) == len(m.columns) + len(m.cores)
+    assert sum(b.area for b in under) < foot.area * 0.2
+
+    # above it, the building is whole again
+    assert len(m.bands_at(12.0)) == 1
+
+    # in section, the lift is a level the drawing knows about
+    assert 8.0 in [round(z, 3) for z in m.joint_heights()]
+    assert m.section((0, 0), (1.0, 0.0))
+
+    # and the same building with no lift has none of it
+    plain = M.Extrusion(foot, storeys=3, floor_to_floor=4.2)
+    assert plain.lift == 0.0 and plain.columns == [] and plain.cores == []
+    assert plain.levels[0].ffl == 0.0
+
+
+def test_a_building_you_walk_under_gets_a_drawing_of_what_you_walk_through():
+    from archiai.engine import massing as M, interpret as IN
+    spec = IN.to_spec(READING, BRIEF)
+    massing, brf = B.build(spec)
+    p = PJ.Project(massing, brf)
+    with tempfile.TemporaryDirectory() as d:
+        made = p.build(d, disciplines=["architecture"])
+        assert "A-090" in [n for n, *_ in made]
+        body = open([x for x in made if x[0] == "A-090"][0][3]).read()
+    assert "CORE" in body and "GROUND PLANE" in body
+    assert "Building held 9.0 m clear of the ground." in body
+    assert "columns at 180 mm; 2 core(s) to foundation." in body
+
+    # a building on the ground has no such sheet, because there is nothing under it
+    plain, brf2 = B.build(B.Spec(use="office", storeys=3, area=3000.0,
+                                 floor_to_floor=3.9))
+    with tempfile.TemporaryDirectory() as d:
+        made = PJ.Project(plain, brf2).build(d, disciplines=["architecture"])
+    assert "A-090" not in [n for n, *_ in made]

@@ -440,21 +440,50 @@ def _collar(scene, lower, upper, z, n=64):
         scene.face(quad, material, cull=False)
 
 
+def undercroft(scene, project, keep=None):
+    """The open ground plane: what holds the building up, and its soffit.
+
+    A lifted building only reads as lifted if you can see under it, so the
+    columns are drawn as shafts and the underside is a lit face rather than
+    the bottom edge of a wall."""
+    m = project.massing
+    keep = keep or (lambda p: True)
+    for c in list(m.columns) + list(m.cores):
+        ring = G.resample(c.region.outer, 1.5)
+        n = len(ring)
+        mat = "spandrel" if c.kind == "column" else "wall"
+        for k in range(n):
+            a, b = ring[k], ring[(k + 1) % n]
+            mid = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+            if not keep(mid):
+                continue
+            scene.face([(a[0], a[1], 0.0), (b[0], b[1], 0.0),
+                        (b[0], b[1], m.lift), (a[0], a[1], m.lift)], mat)
+    base = m.levels[0].plate
+    _face_with_holes(scene, [(x, y, m.lift) for (x, y) in base.outer][::-1],
+                     [[(x, y, m.lift) for (x, y) in h][::-1] for h in base.holes],
+                     "soffit")
+
+
 def building(scene, project, cutaway=None):
     """Facades band by band, so the render shows the windows the schedule
     counts rather than a blank extrusion."""
     m = project.massing
     t = project.brief.wall_t
     top = m.height
+    lift = getattr(m, "lift", 0.0)
 
     def keep(p):
         return cutaway is None or not cutaway(p)
+
+    if lift:
+        undercroft(scene, project, keep)
 
     for i, lv in enumerate(m.levels):
         nxt = m.levels[i + 1].ffl if i + 1 < len(m.levels) else top
         z_sill = lv.ffl + OP.SILL
         z_head = nxt - OP.HEAD_GAP
-        base = lv.ffl - OP.HEAD_GAP if i else 0.0
+        base = lv.ffl - OP.HEAD_GAP if i else (lv.ffl if lift else 0.0)
         if i:
             prev = m.levels[i - 1].plate
             _collar(scene, prev.outer, lv.plate.outer, base)

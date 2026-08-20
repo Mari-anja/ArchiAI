@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from ..engine import brief as B
 from ..engine import export as EX
 from ..engine import geom2d as G
+from ..engine import interpret as IN
 from .config import settings
 from .storage import make_storage
 from .models import (GenerateRequest, GenerateResponse, ParseRequest,
@@ -108,6 +109,8 @@ def vocabulary():
         "shapes": sorted(set(B.SHAPES.values())),
         "shape_words": sorted(B.SHAPES),
         "unplanned": sorted(B.UNPLANNED),
+        "moves": list(B.Spec.MOVES),
+        "reads_prose": IN.available(),
         "compass": B.COMPASS,
         "max_storeys": settings.max_storeys,
         "max_area_m2": settings.max_area,
@@ -115,16 +118,21 @@ def vocabulary():
 
 
 @app.post("/v1/parse", response_model=ParseResponse)
-def parse(req: ParseRequest, _=Depends(require_key)):
+async def parse(req: ParseRequest, _=Depends(require_key)):
     """Read a brief without generating anything. Free, and safe to call on
     every keystroke so the UI can show what was understood before committing."""
-    spec = B.parse(req.brief)
+    spec, how = await run_in_threadpool(IN.parse, req.brief)
     sheets = gen.estimate_sheets(spec.storeys, req.disciplines)
+    out = {"use": spec.use, "shape": spec.shape, "storeys": spec.storeys,
+           "area_m2": spec.area, "entrance_azimuth": spec.entrance,
+           "floor_to_floor_m": spec.floor_to_floor, "name": spec.name,
+           "read_by": how, "intent": spec.intent}
+    for move in B.Spec.MOVES:
+        v = getattr(spec, move, None)
+        if v:
+            out[move] = v
     return ParseResponse(
-        spec={"use": spec.use, "shape": spec.shape, "storeys": spec.storeys,
-              "area_m2": spec.area, "entrance_azimuth": spec.entrance,
-              "floor_to_floor_m": spec.floor_to_floor, "name": spec.name},
-        assumptions=spec.assumptions,
+        spec=out, assumptions=spec.assumptions,
         estimated_sheets=sheets,
         estimated_cost_units=20 + 6 * sheets + 2 * spec.storeys,
     )

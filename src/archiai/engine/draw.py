@@ -204,6 +204,59 @@ def plan_sheet(project, i, out, paper="A1"):
     return s.save(out)
 
 
+def ground_plane_sheet(project, out, paper="A1"):
+    """The open ground under a lifted building.
+
+    A building people walk beneath needs a drawing of what they walk through:
+    the columns holding it up, the cores that come down, and the edge of the
+    mass overhead. Without it the set says nothing about the idea."""
+    m = project.massing
+    P = project.info
+    s = Sheet("A-090", "Ground Level — Open Plane", "1 : %d", paper,
+              "FFL +0.000, soffit over at %+.3f" % m.lift, P,
+              ["The ground plane runs under the building.",
+               "Soffit over shown dashed. Do not scale."])
+    x0, y0, x1, y1 = s.area()
+    grid = project.grid
+    base = m.levels[0].plate
+    bx = _expanded_bbox(base.bbox(), grid)
+    scale = fit_scale(bx, x1 - x0, y1 - y0, margin_mm=30.0)
+    s.scale_text = "1 : %d" % scale
+    s.frame()
+    mx, my = (bx[0] + bx[2]) / 2.0, (bx[1] + bx[3]) / 2.0
+    v = View(s, scale, (x0 + x1) / 2.0 - mx * 1000.0 / scale,
+             (y0 + y1) / 2.0 + my * 1000.0 / scale)
+
+    # the landscape it stands in, then the mass overhead as an outline only
+    for ring in base.rings:
+        s.path(ring_path(v, ring), w="thin", color=GREY, dash="8,3")
+    for c in m.columns:
+        s.path(ring_path(v, c.region.outer), w="cut", color=INK,
+               fill=s.pattern("concrete"))
+    for c in m.cores:
+        s.path(ring_path(v, c.region.outer), w="cut", color=INK,
+               fill=s.pattern("concrete"))
+        cx, cy = c.centre
+        px, py = v.p(cx, cy + c.size / 2.0 + 1.6)
+        s.text(px, py, "CORE", size=2.4, anchor="middle", color=GREY)
+    draw_grid(s, v, grid, bx)
+    if isinstance(grid, OrthoGrid):
+        dimension_ortho(s, v, grid)
+
+    A.north_arrow(s, x1 - 26, y0 + 28)
+    A.scale_bar(s, v, x0 + 8, y1 - 26, _bar_len(scale), 4,
+                label="SCALE 1:%d" % scale)
+    n = len(m.columns)
+    size = (m.columns[0].size * 1000) if m.columns else 0
+    A.notes_block(s, x0 + 8, y1 - 70, "GROUND PLANE", [
+        "Building held %.1f m clear of the ground." % m.lift,
+        "%d columns at %d mm; %d core(s) to foundation." % (n, size, len(m.cores)),
+        "Ground under the building is open and continuous.",
+    ], width=64)
+    A.level_tag(s, *v.p(*_tag_point(base)), 0.0, "GL")
+    return s.save(out)
+
+
 def _bar_len(scale):
     return {20: 2, 50: 5, 100: 10, 150: 20, 200: 20, 250: 25, 500: 50,
             1000: 100, 2000: 200}.get(scale, 20)

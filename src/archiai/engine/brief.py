@@ -127,8 +127,17 @@ COMPASS = {"north": 90.0, "south": 270.0, "east": 0.0, "west": 180.0,
 class Spec:
     """What was asked for, plus what had to be assumed."""
 
+    # Moves the massing can actually make. Nothing is listed here that the
+    # engine cannot build, because a vocabulary that promises more than the
+    # thing behind it is worse than a small one.
+    MOVES = ("lift_m", "columns", "cores_to_ground", "ground", "facade",
+             "courtyard_fraction", "setback")
+
     def __init__(self, use="office", storeys=3, area=None, shape="bar",
-                 entrance=270.0, name=None, floor_to_floor=None):
+                 entrance=270.0, name=None, floor_to_floor=None,
+                 lift_m=0.0, columns=None, cores_to_ground=0, ground=None,
+                 facade=None, courtyard_fraction=None, setback=None,
+                 intent=None):
         use = (use or "office").strip().lower()
         if use not in USE_DEFAULTS:
             raise ValueError(
@@ -142,6 +151,15 @@ class Spec:
         self.shape, self.entrance = shape, entrance
         self.name = name or shape.title() + " " + use
         self.floor_to_floor = floor_to_floor
+        # A building held above an open ground plane, and what holds it.
+        self.lift_m = max(0.0, float(lift_m or 0.0))
+        self.columns = dict(columns or {})
+        self.cores_to_ground = int(cores_to_ground or 0)
+        self.ground = ground                    # planted / paved / open
+        self.facade = facade                    # mirror / glass / concrete ...
+        self.courtyard_fraction = courtyard_fraction
+        self.setback = setback                  # metres stepped in up the mass
+        self.intent = intent                    # the sentence it was read from
         self.assumptions = []
 
     def assume(self, what):
@@ -292,17 +310,31 @@ def build(spec):
 
     # Setbacks take area off the upper floors, so sizing the base plate alone
     # undershoots the target. Rebuild a couple of times against actual GIA.
-    massing = M.Extrusion(family(s), storeys=spec.storeys,
-                          floor_to_floor=spec.floor_to_floor, setbacks=setbacks)
+    def make(side):
+        foot = family(side)
+        cols = cores = None
+        if spec.lift_m:
+            c = spec.columns or {}
+            cols = M.piloti(foot,
+                            spacing=float(c.get("spacing_m") or 8.4),
+                            size=float(c.get("diameter_mm") or 400) / 1000.0,
+                            round_=(c.get("shape", "round") != "square"),
+                            material=c.get("material") or "concrete")
+            if spec.cores_to_ground:
+                cores = M.core_supports(foot, spec.cores_to_ground)
+        return M.Extrusion(foot, storeys=spec.storeys,
+                           floor_to_floor=spec.floor_to_floor,
+                           setbacks=setbacks, lift=spec.lift_m,
+                           columns=cols, cores=cores)
+
+    massing = make(s)
     if spec.area:
         for _ in range(6):
             err = massing.gia() / spec.area
             if abs(err - 1.0) < 0.005:
                 break
             s /= math.sqrt(err)
-            massing = M.Extrusion(family(s), storeys=spec.storeys,
-                                  floor_to_floor=spec.floor_to_floor,
-                                  setbacks=setbacks)
+            massing = make(s)
     brief = L.Brief(use=spec.use, daylight_depth=d["daylight"],
                     corridor_w=d["corridor"], room_width=d["room_w"],
                     entrance_azimuth=spec.entrance, name=spec.name)

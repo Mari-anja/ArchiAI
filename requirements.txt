@@ -1,5 +1,7 @@
-# The engine itself has no dependencies. These are for the HTTP service only.
+# The engine itself has no dependencies. These are for the HTTP service, and
+# for reading a brief written the way a person writes one.
 fastapi>=0.110
 uvicorn[standard]>=0.27
 pydantic>=2.6
 httpx>=0.27
+anthropic>=0.40

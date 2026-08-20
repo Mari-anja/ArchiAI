@@ -70,11 +70,26 @@ async function parse() {
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || "could not read that");
     const s = d.spec;
-    let html = `<b>Understood:</b> ${s.storeys} storey ${s.use}` +
+    let html = "";
+    if (s.intent) html += `<i>${s.intent}</i><br>`;
+    html += `<b>Understood:</b> ${s.storeys} storey ${s.use}` +
       (s.area_m2 ? `, ${(+s.area_m2).toLocaleString()} m²` : "") +
-      `, ${s.shape} shaped. About ${d.estimated_sheets} sheets.`;
+      `, ${s.shape} shaped`;
+    // the moves, so a brief that asked for one can see it landed
+    const moves = [];
+    if (s.lift_m) moves.push(`held ${(+s.lift_m).toFixed(1)} m above the ground` +
+      (s.columns ? ` on ${Math.round(s.columns.diameter_mm)} mm ${s.columns.material} columns` : ""));
+    if (s.cores_to_ground) moves.push(`${s.cores_to_ground} cores down to the earth`);
+    if (s.ground) moves.push(`${s.ground} ground plane`);
+    if (s.facade) moves.push(`${s.facade} facade`);
+    if (s.setback) moves.push(`upper floors stepped in ${(+s.setback).toFixed(1)} m`);
+    if (moves.length) html += `, ${moves.join(", ")}`;
+    html += `. About ${d.estimated_sheets} sheets.`;
     if (d.assumptions.length)
       html += `<br><b>Assumed:</b> ${d.assumptions.join(" ")}`;
+    if (s.read_by === "keyword")
+      html += `<br><b>Read by keyword only.</b> Set ANTHROPIC_API_KEY and ` +
+              `restart to have it read what you actually wrote.`;
     box.innerHTML = html;
     $("#storeys").value = s.storeys;
     if (s.use) $("#use").value = s.use;

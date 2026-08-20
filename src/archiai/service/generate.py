@@ -7,6 +7,7 @@ import time
 import uuid
 
 from ..engine import brief as B
+from ..engine import interpret as IN
 from ..engine import geom2d as G
 from ..engine import layout as L
 from ..engine import massing as M
@@ -112,9 +113,10 @@ def assemble(req):
 
     if mode == "brief":
         try:
-            spec = B.parse(req.brief)
+            spec, how = IN.parse(req.brief)
         except ValueError as e:
             raise Refused(str(e))
+        info["read_by"] = how
         _guard(spec.storeys, spec.area, _disc(req))
         massing, brf = B.build(spec)
         info["subtitle"] = spec.name
