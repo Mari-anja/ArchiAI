@@ -23,6 +23,12 @@ class Settings:
         self.supabase_public = _bool("SUPABASE_BUCKET_PUBLIC", True)
         self.max_storeys = int(os.environ.get("ARCHIAI_MAX_STOREYS", "60"))
         self.max_area = float(os.environ.get("ARCHIAI_MAX_AREA_M2", "400000"))
+        # What a request actually costs is sheets drawn, not floor area: a
+        # sixty storey tower on a small plate is a small building and a very
+        # large amount of drawing. A sheet takes about 17 ms, so this is a
+        # ceiling of roughly half a minute, and the storey limit above
+        # normally bites first.
+        self.max_sheets = int(os.environ.get("ARCHIAI_MAX_SHEETS", "1500"))
         self.request_timeout = float(os.environ.get("ARCHIAI_UPLOAD_TIMEOUT", "30"))
         # Which image service runs the photoreal pass. "none" still returns the
         # control images and the description, which is the reusable part.

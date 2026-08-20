@@ -364,3 +364,149 @@ def subtract_intervals(a, b):
             pieces = nxt
         out += [(s2, e2) for (s2, e2) in pieces if e2 - s2 > 1e-9]
     return out
+
+# ---------------------------------------------------------------------------
+# Is this outline buildable?
+# ---------------------------------------------------------------------------
+def _segments_cross(a, b, c, d):
+    def side(p, q, r):
+        v = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+        return 0 if abs(v) < 1e-12 else (1 if v > 0 else -1)
+    d1, d2 = side(c, d, a), side(c, d, b)
+    d3, d4 = side(a, b, c), side(a, b, d)
+    return d1 != d2 and d3 != d4
+
+
+def self_intersects(ring, limit=400):
+    """Does the outline cross itself? A shape drawn with a mouse often does."""
+    n = len(ring)
+    if n < 4 or n > limit:
+        return False
+    for i in range(n):
+        a, b = ring[i], ring[(i + 1) % n]
+        for j in range(i + 2, n):
+            if i == 0 and j == n - 1:
+                continue                      # they share the closing vertex
+            c, d = ring[j], ring[(j + 1) % n]
+            if _segments_cross(a, b, c, d):
+                return True
+    return False
+
+
+def problems(region, min_area=25.0, max_area=None, min_width=3.0):
+    """Everything wrong with an outline, in sentences someone can act on.
+
+    Drawn and traced outlines arrive from a mouse or a photograph, so they
+    come with the faults a mouse and a photograph produce: shapes that cross
+    themselves, courtyards that are not inside the building, slivers nothing
+    fits in. Saying so is better than drawing nonsense from them."""
+    out = []
+    outer = dedupe(list(region.outer))
+    if len(outer) < 3:
+        return ["the outline needs at least three separate corners"]
+    a = area(outer)
+    if a < 1e-6:
+        return ["the outline encloses no area; it may double back on itself"]
+    if self_intersects(outer):
+        out.append("the outline crosses itself; each corner should join the "
+                   "next without the edges overlapping")
+    if a < min_area:
+        out.append("the outline encloses only %.1f m²; it is probably drawn in "
+                   "the wrong units" % a)
+    if max_area and a > max_area:
+        out.append("the outline encloses %s m², which is above the limit of "
+                   "%s m²" % (_thousands(a), _thousands(max_area)))
+    for i, h in enumerate(region.holes, 1):
+        hh = dedupe(list(h))
+        if len(hh) < 3:
+            out.append("courtyard %d needs at least three corners" % i)
+            continue
+        if not all(point_in_ring(p, outer) for p in hh):
+            out.append("courtyard %d is not inside the outline" % i)
+        elif area(hh) >= a * 0.92:
+            out.append("courtyard %d leaves almost no building around it" % i)
+    for i in range(len(region.holes)):
+        for j in range(i + 1, len(region.holes)):
+            if any(point_in_ring(p, region.holes[i]) for p in region.holes[j]):
+                out.append("courtyards %d and %d overlap" % (i + 1, j + 1))
+                break
+    if not out and min_width and not fits_inside(region, min_width / 2.0):
+        # nothing fits in a shape thinner than a room, and a plan of it is a
+        # drawing of a line
+        out.append("the outline is under %.0f m across; a room will not fit "
+                   "inside it" % min_width)
+    return out
+
+
+def fits_inside(region, d):
+    """Is there anything left after pulling the boundary in by d?
+
+    Asking the shrunk shape for its area is not enough: a mitred offset past
+    the middle of a thin shape turns it inside out, and an inside out polygon
+    reports a cheerful positive area. Containment is not enough either --
+    flip a thin rectangle about its own centre line and every corner is still
+    inside where it started.
+
+    What does change is the direction the boundary runs. An offset that had
+    room to move keeps its winding; one that has passed through the middle and
+    come out the other side reverses it. So the test is the sign."""
+    if d <= 0:
+        return True
+    outer = offset_ring(ccw(dedupe(list(region.outer))), -d)
+    if len(outer) < 3 or signed_area(outer) <= 1e-6:
+        return False
+    for h in region.holes:
+        grown = offset_ring(cw(dedupe(list(h))), -d)
+        if len(grown) < 3 or signed_area(grown) >= -1e-6:
+            return False                      # the courtyard turned inside out
+        if not all(point_in_ring(p, outer) for p in grown):
+            return False                      # or ate the building around it
+    return True
+
+
+def _thousands(v):
+    return "{:,.0f}".format(v).replace(",", " ")
+
+
+def convex_hull(ring):
+    """The smallest convex outline containing every corner, anticlockwise."""
+    pts = sorted(set((round(x, 9), round(y, 9)) for (x, y) in ring))
+    if len(pts) < 3:
+        return list(pts)
+
+    def half(seq):
+        out = []
+        for q in seq:
+            while len(out) >= 2:
+                (ax, ay), (bx, by) = out[-2], out[-1]
+                if (bx - ax) * (q[1] - ay) - (by - ay) * (q[0] - ax) <= 0:
+                    out.pop()
+                else:
+                    break
+            out.append(q)
+        return out[:-1]
+
+    return half(pts) + half(pts[::-1])
+
+
+def solidity(ring):
+    """Area as a fraction of its convex hull: 1 for a box, less for a comb.
+
+    A shape read out of a photograph that has gone wrong is not merely
+    complicated, it is riddled — this is how that shows up as a number."""
+    hull = convex_hull(ring)
+    if len(hull) < 3:
+        return 0.0
+    h = abs(signed_area(hull))
+    return abs(signed_area(ring)) / h if h > 1e-12 else 0.0
+
+
+def raggedness(ring):
+    """Perimeter measured in units of the shape's own size.
+
+    Four for a square, five for a shaky freehand circle, eight for a deep
+    comb, and well into the teens for something that is not a drawing."""
+    a = abs(signed_area(ring))
+    if a <= 1e-12:
+        return 1e9
+    return perimeter(ring) / math.sqrt(a)

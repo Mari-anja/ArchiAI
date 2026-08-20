@@ -59,7 +59,13 @@ def build_project(args):
     return PJ.Project(massing, brf, info), spec
 
 
+MAX_AREA = 400000.0
+
+
 def _from_region(region, args, name):
+    faults = G.problems(region, max_area=MAX_AREA)
+    if faults:
+        raise ValueError(faults[0])
     d = B.USE_DEFAULTS.get(args.use, B.USE_DEFAULTS["office"])
     massing = M.Extrusion(region, storeys=args.storeys,
                           floor_to_floor=args.floor_to_floor)

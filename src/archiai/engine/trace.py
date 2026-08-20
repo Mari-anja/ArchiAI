@@ -272,6 +272,9 @@ def solid(rows, w, h, threshold=None, keep_hole_frac=0.012):
             enclosed_n += 1
             reps.setdefault(lb, []).append((r, c))
 
+    if ink_n > 0.95 * w * h:
+        raise ValueError("the whole picture is dark; there is no outline in it "
+                         "to read")
     filled = _is_filled(ink_n, enclosed_n)
     inside = set()
     if not filled:
@@ -290,6 +293,9 @@ def solid(rows, w, h, threshold=None, keep_hole_frac=0.012):
     if len(sz) < 2:
         raise ValueError("no shape found in the image")
     main = max(range(1, len(sz)), key=lambda i: sz[i])
+    if sz[main] > 0.97 * w * h:
+        raise ValueError("the shape fills the whole picture; leave a margin of "
+                         "paper around the outline so its edge can be found")
     if sz[main] < 0.004 * w * h:
         raise ValueError("the largest shape covers less than half a percent "
                          "of the image; is the drawing too faint?")
@@ -518,6 +524,18 @@ def footprint(rows, w=None, h=None, area_m2=None, width_m=None,
     loops = boundary_loops(shape, w, h)
     if not loops:
         raise ValueError("no closed outline could be traced")
+
+    # A drawn outline is a few smooth strokes. A photograph that has gone
+    # wrong - grainy paper, a shadow across the page, a screen photographed
+    # off a screen - gives a shape that is at once riddled and enormously
+    # long for its size. Building from that would be inventing a plan nobody
+    # drew, so it is better to say the picture cannot be read.
+    biggest = max(loops, key=lambda r: abs(G.signed_area(r)))
+    if G.raggedness(biggest) > 12.0 and G.solidity(biggest) < 0.62:
+        raise ValueError(
+            "the marks in this picture do not join up into a drawn outline; "
+            "photograph the sketch flat, in even light, with the paper "
+            "filling the frame")
 
     eps = simplify * max(w, h)
     rings = []

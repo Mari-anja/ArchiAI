@@ -27,17 +27,45 @@ class Refused(ValueError):
     """The request is valid JSON but not a buildable brief."""
 
 
-def _guard(storeys, area):
+# Sheets drawn per storey, by discipline: plans and ceilings, framing, power
+# and lighting, ventilation, fire strategy.
+PER_STOREY = {"architecture": 2, "structure": 1, "electrical": 2,
+              "mechanical": 1, "public_health": 0, "fire": 1}
+FIXED = {"architecture": 9, "structure": 1, "electrical": 0, "mechanical": 0,
+         "public_health": 1, "fire": 0}
+
+
+def estimate_sheets(storeys, disciplines=None):
+    want = list(disciplines or PER_STOREY)
+    return 1 + sum(FIXED.get(d, 0) + PER_STOREY.get(d, 0) * storeys
+                   for d in want)
+
+
+def _guard(storeys, area, disciplines=None):
     if storeys > settings.max_storeys:
-        raise Refused("storeys above the configured limit of %d" % settings.max_storeys)
+        raise Refused("storeys above the configured limit of %d"
+                      % settings.max_storeys)
+    if area and storeys and area / max(storeys, 1) < 15.0:
+        raise Refused("a floor of %.0f m2 is too small to plan; check the area "
+                      "and the units" % (area / max(storeys, 1)))
     if area and area > settings.max_area:
-        raise Refused("floor area above the configured limit of %.0f m2" % settings.max_area)
-    # One plan is drawn per storey, so the work is storeys x plate perimeter.
-    # Cap the product rather than each factor, or a 60-storey megablock ties up
-    # a worker for minutes while passing both limits individually.
-    if area and storeys * area > settings.max_area * 12:
-        raise Refused("storeys x floor area is too large for a single request; "
-                      "split the scheme or raise ARCHIAI_MAX_AREA_M2")
+        raise Refused("floor area above the configured limit of %.0f m2"
+                      % settings.max_area)
+    # What costs is the drawing, and one plan is drawn per storey per
+    # discipline. A tall building on a small plate passes an area limit and
+    # still ties up a worker for minutes, so the cap is on sheets.
+    sheets = estimate_sheets(storeys, disciplines)
+    if sheets > settings.max_sheets:
+        raise Refused(
+            "that would be about %d sheets, above the limit of %d. Ask for "
+            "fewer storeys, or fewer disciplines than %s."
+            % (sheets, settings.max_sheets,
+               ", ".join(sorted(disciplines or PER_STOREY))))
+
+
+def _disc(req):
+    """Which disciplines a request wants. A view or a render asks for none."""
+    return getattr(req, "disciplines", None)
 
 
 def num_of(project):
@@ -49,11 +77,15 @@ def _with_source(project, source):
     return project
 
 
-def _from_region(region, opts, info, default_name, traced=False):
+def _from_region(region, opts, info, default_name, traced=False,
+                 disciplines=None):
     """A traced or drawn outline plus a use becomes a Project."""
-    if region.area < 25.0:
-        raise Refused("the outline encloses only %.1f m2; give an area or a "
-                      "width so it can be scaled" % region.area)
+    storeys = int(getattr(opts, "storeys", 1) or 1)
+    faults = G.problems(region, max_area=settings.max_area)
+    if faults:
+        raise Refused(faults[0] if len(faults) == 1
+                      else "; and ".join(faults[:2]))
+    _guard(storeys, region.area * storeys, disciplines)
     d = B.USE_DEFAULTS.get(opts.use, B.USE_DEFAULTS["office"])
     massing = M.Extrusion(region, storeys=opts.storeys,
                           floor_to_floor=opts.floor_to_floor)
@@ -79,8 +111,11 @@ def assemble(req):
         info["client"] = req.client
 
     if mode == "brief":
-        spec = B.parse(req.brief)
-        _guard(spec.storeys, spec.area)
+        try:
+            spec = B.parse(req.brief)
+        except ValueError as e:
+            raise Refused(str(e))
+        _guard(spec.storeys, spec.area, _disc(req))
         massing, brf = B.build(spec)
         info["subtitle"] = spec.name
         return spec, _with_source(PJ.Project(massing, brf, info),
@@ -88,12 +123,15 @@ def assemble(req):
 
     if mode == "spec":
         s = req.spec
-        spec = B.Spec(use=s.use, shape=s.shape, storeys=s.storeys, area=s.area_m2,
-                      entrance=s.entrance_azimuth, name=s.name,
-                      floor_to_floor=s.floor_to_floor)
+        try:
+            spec = B.Spec(use=s.use, shape=s.shape, storeys=s.storeys,
+                          area=s.area_m2, entrance=s.entrance_azimuth,
+                          name=s.name, floor_to_floor=s.floor_to_floor)
+        except ValueError as e:
+            raise Refused(str(e))
         if spec.floor_to_floor is None:
             spec.floor_to_floor = B.USE_DEFAULTS.get(spec.use, B.USE_DEFAULTS["office"])["f2f"]
-        _guard(spec.storeys, spec.area)
+        _guard(spec.storeys, spec.area, _disc(req))
         massing, brf = B.build(spec)
         info["subtitle"] = spec.name
         return spec, _with_source(PJ.Project(massing, brf, info),
@@ -101,7 +139,7 @@ def assemble(req):
 
     if mode == "image":
         im = req.image
-        _guard(im.storeys, im.area_m2)
+        _guard(im.storeys, im.area_m2, _disc(req))
         try:
             region = IMG.footprint_from_upload(
                 im.data, area_m2=im.area_m2, width_m=im.width_m,
@@ -110,18 +148,17 @@ def assemble(req):
             raise Refused(str(e))
         return None, _from_region(region, im, info,
                                   im.name or "Traced from an upload",
-                                  traced=True)
+                                  traced=True, disciplines=_disc(req))
 
     f = req.footprint
-    _guard(f.storeys, None)
-    outer = [(float(x), float(y)) for (x, y) in f.outer]
-    holes = [[(float(x), float(y)) for (x, y) in h] for h in f.holes]
-    region = G.Region(outer, holes)
-    if region.area < 25.0:
-        raise Refused("footprint encloses only %.1f m2; expected metres, not "
-                      "millimetres or screen pixels" % region.area)
-    d = B.USE_DEFAULTS.get(f.use, B.USE_DEFAULTS["office"])
-    return None, _from_region(region, f, info, f.name or "Drawn footprint")
+    try:
+        region = G.Region([(float(x), float(y)) for (x, y) in f.outer],
+                          [[(float(x), float(y)) for (x, y) in h]
+                           for h in f.holes])
+    except (TypeError, ValueError) as e:
+        raise Refused("could not read that outline: %s" % e)
+    return None, _from_region(region, f, info, f.name or "Drawn footprint",
+                              disciplines=_disc(req))
 
 
 def render_sheets(project, out_dir, elevations, disciplines=None):
@@ -182,16 +219,17 @@ DISCIPLINE = {"A": "architectural", "S": "structural", "E": "electrical",
 def assemble_revision(req):
     """A previous source plus a change, as a Project ready to draw."""
     try:
-        new_source, notes = RV.apply(req.source, req.changes)
+        new_source, notes = RV.apply(req.source, req.changes,
+                                     max_storeys=settings.max_storeys)
     except RV.Rejected as e:
         raise Refused(str(e))
     if req.revision:
         new_source["revision"] = req.revision
     try:
         spec, massing, brf = RV.build(new_source)
-    except RV.Rejected as e:
+    except (RV.Rejected, ValueError) as e:
         raise Refused(str(e))
-    _guard(len(massing.levels), massing.gia())
+    _guard(len(massing.levels), massing.gia(), _disc(req))
 
     info = {"number": req.number or "AAI-%s" % uuid.uuid4().hex[:6].upper(),
             "rev": new_source.get("revision", "P02")}

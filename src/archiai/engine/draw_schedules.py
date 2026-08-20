@@ -285,7 +285,9 @@ def schedule_sheet(project, out, number="A-700", paper="A1"):
     s.text(col, yy, "AREA BY USE", 3.4, "start", INK, "700", spacing=1.2)
     s.line(col, yy + 4, col + 250, yy + 4, w="med", color=INK)
     yy += 12
-    mx = max(agg.values()) if agg else 1.0
+    # a degenerate plate has rooms of no area, and a bar chart scaled to the
+    # largest of nothing divides by zero
+    mx = max(agg.values(), default=0.0) or 1.0
     total = sum(agg.values()) or 1.0
     for k, val in sorted(agg.items(), key=lambda kv: -kv[1]):
         fill, stroke, label = L.CATEGORY.get(k, ("#eee", "#999", k))

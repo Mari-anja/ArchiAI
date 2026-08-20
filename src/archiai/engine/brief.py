@@ -100,6 +100,15 @@ class Spec:
 
     def __init__(self, use="office", storeys=3, area=None, shape="bar",
                  entrance=270.0, name=None, floor_to_floor=None):
+        use = (use or "office").strip().lower()
+        if use not in USE_DEFAULTS:
+            raise ValueError(
+                "no idea how to plan a %s; the uses it knows are %s"
+                % (use, ", ".join(sorted(USE_DEFAULTS))))
+        shape = (shape or "bar").strip().lower()
+        if shape not in SHAPES:
+            raise ValueError("no such shape %r; the shapes it knows are %s"
+                             % (shape, ", ".join(sorted(SHAPES))))
         self.use, self.storeys, self.area = use, storeys, area
         self.shape, self.entrance = shape, entrance
         self.name = name or shape.title() + " " + use

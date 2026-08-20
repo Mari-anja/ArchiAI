@@ -22,12 +22,25 @@ from . import geom2d as G
 
 # ---------------------------------------------------------------------------
 class Level:
-    __slots__ = ("index", "name", "ffl", "to_ffl", "plate", "slab_t")
+    __slots__ = ("index", "name", "ffl", "to_ffl", "plate", "slab_t", "_band")
 
     def __init__(self, index, name, ffl, to_ffl, plate, slab_t=0.30):
         self.index, self.name = index, name
         self.ffl, self.to_ffl = ffl, to_ffl
         self.plate, self.slab_t = plate, slab_t
+        self._band = None
+
+    def band(self, t):
+        """The wall band of this plate, worked out once.
+
+        Cutting the building at a height is the single most asked question in
+        the whole engine -- every plan, every section sample, every point on a
+        swept wall -- and the answer for a given level never changes. Working
+        it out afresh each time makes a mitred offset of every ring, which is
+        what turned a tall building from linear into quadratic."""
+        if self._band is None or self._band[0] != t:
+            self._band = (t, self.plate.band(t))
+        return self._band[1]
 
     @property
     def area(self):
@@ -47,14 +60,16 @@ class Zone:
 
 # ---------------------------------------------------------------------------
 class Mesh:
-    __slots__ = ("v", "f", "groups")
+    __slots__ = ("v", "f", "groups", "_bounds")
 
     def __init__(self):
         self.v, self.f, self.groups = [], [], {}
+        self._bounds = None
 
     def add(self, verts, group="shell"):
         i0 = len(self.v)
         self.v.extend(verts)
+        self._bounds = None
         return list(range(i0, len(self.v)))
 
     def face(self, idx, group="shell"):
@@ -75,8 +90,12 @@ class Mesh:
         return len(self.f)
 
     def bounds(self):
-        xs = [p[0] for p in self.v]; ys = [p[1] for p in self.v]; zs = [p[2] for p in self.v]
-        return (min(xs), min(ys), min(zs), max(xs), max(ys), max(zs))
+        # Scanning every vertex is cheap once and ruinous eight thousand times,
+        # which is how often a swept drawing asks a building how tall it is.
+        if self._bounds is None:
+            xs = [p[0] for p in self.v]; ys = [p[1] for p in self.v]; zs = [p[2] for p in self.v]
+            self._bounds = (min(xs), min(ys), min(zs), max(xs), max(ys), max(zs))
+        return self._bounds
 
     # -- slicing -----------------------------------------------------------
     def slice_plane(self, point, normal):
@@ -328,8 +347,8 @@ class Extrusion(Massing):
     def cut(self, z):
         for lv in reversed(self.levels):
             if z >= lv.ffl - 1e-9:
-                return lv.plate.band(self.wall_t)
-        return self.levels[0].plate.band(self.wall_t)
+                return lv.band(self.wall_t)
+        return self.levels[0].band(self.wall_t)
 
     def build_mesh(self):
         m = Mesh()

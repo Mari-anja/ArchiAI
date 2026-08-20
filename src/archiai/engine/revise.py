@@ -196,6 +196,10 @@ def next_revision(rev):
 # ---------------------------------------------------------------------------
 MIN_BAND = 7.0          # metres of building left between a courtyard and the edge
 
+# The tallest building an edit may ask for. The service usually sets a lower
+# one; this is only here so a stray number cannot reach the engine at all.
+MAX_STOREYS = 200
+
 
 def _scale_hole(region, factor):
     """Grow or shrink the courtyard about its own centre."""
@@ -246,8 +250,11 @@ def _promote(source):
 
 
 # ---------------------------------------------------------------------------
-def apply(source, changes):
-    """(new source, notes). Nothing is mutated; the old source still stands."""
+def apply(source, changes, max_storeys=None):
+    """(new source, notes). Nothing is mutated; the old source still stands.
+
+    `max_storeys` is the caller's ceiling, so the first refusal a person sees
+    quotes the limit that will actually be applied to them."""
     if not isinstance(changes, dict) or not changes:
         raise Rejected("no changes given")
     unknown = [k for k in changes if k not in CHANGES]
@@ -256,6 +263,7 @@ def apply(source, changes):
                        % (", ".join(sorted(unknown)), ", ".join(CHANGES)))
 
     src = _copy(source)
+    cap = min(int(max_storeys or MAX_STOREYS), MAX_STOREYS)
     notes = []
 
     # a geometric edit on a specified building promotes it to an outline first
@@ -266,9 +274,9 @@ def apply(source, changes):
                      "can be edited directly.")
 
     if src["kind"] == "spec":
-        _apply_spec(src, changes, notes)
+        _apply_spec(src, changes, notes, cap)
     else:
-        _apply_footprint(src, changes, notes)
+        _apply_footprint(src, changes, notes, cap)
 
     if not notes:
         raise Rejected("those values are already what the project has")
@@ -301,11 +309,11 @@ def _entrance(value, current, notes):
     return new
 
 
-def _apply_spec(src, changes, notes):
+def _apply_spec(src, changes, notes, cap=MAX_STOREYS):
     s = src["spec"]
     if "storeys" in changes:
         n = int(round(_read(changes["storeys"], s.get("storeys"), "storeys",
-                            minimum=1, maximum=200)))
+                            minimum=1, maximum=cap)))
         if n != s.get("storeys"):
             was = s["storeys"]
             notes.append("Storeys %d to %d." % (was, n))
@@ -344,6 +352,9 @@ def _apply_spec(src, changes, notes):
             s["shape"] = want
     if "use" in changes:
         want = str(changes["use"]).strip().lower()
+        if want not in B.USE_DEFAULTS:
+            raise Rejected("no idea how to plan a %s; the uses it knows are %s"
+                           % (want, ", ".join(sorted(B.USE_DEFAULTS))))
         if want != s.get("use"):
             notes.append("Use changed from %s to %s." % (s["use"], want))
             s["use"] = want
@@ -359,7 +370,7 @@ def _apply_spec(src, changes, notes):
         raise Rejected("internal: courtyard on a spec source")
 
 
-def _apply_footprint(src, changes, notes):
+def _apply_footprint(src, changes, notes, cap=MAX_STOREYS):
     f = src["footprint"]
     region = region_of(src)
     moved = False
@@ -371,7 +382,7 @@ def _apply_footprint(src, changes, notes):
 
     if "storeys" in changes:
         n = int(round(_read(changes["storeys"], f.get("storeys"), "storeys",
-                            minimum=1, maximum=200)))
+                            minimum=1, maximum=cap)))
         if n != f["storeys"]:
             notes.append("Storeys %d to %d." % (f["storeys"], n))
             f["storeys"] = n
@@ -421,6 +432,9 @@ def _apply_footprint(src, changes, notes):
             moved = True
     if "use" in changes:
         want = str(changes["use"]).strip().lower()
+        if want not in B.USE_DEFAULTS:
+            raise Rejected("no idea how to plan a %s; the uses it knows are %s"
+                           % (want, ", ".join(sorted(B.USE_DEFAULTS))))
         if want != f.get("use"):
             notes.append("Use changed from %s to %s." % (f["use"], want))
             f["use"] = want

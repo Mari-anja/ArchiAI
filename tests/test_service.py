@@ -1430,3 +1430,138 @@ def test_one_command_runs_either_the_page_or_the_engine():
         assert served == [(9111, False)]
     finally:
         run.have = real_have
+
+
+# --- refusing what it cannot honestly build ---------------------------------
+
+def test_an_outline_says_what_is_wrong_with_it_in_words_a_person_can_act_on():
+    """Every complaint names the fault and what to do, never a stack trace."""
+    def sq(w, h, cx=0.0, cy=0.0):
+        return [(cx - w / 2, cy - h / 2), (cx + w / 2, cy - h / 2),
+                (cx + w / 2, cy + h / 2), (cx - w / 2, cy + h / 2)]
+
+    cases = [
+        (G.Region([(0, 0), (40, 30), (40, 0), (0, 30)]), "no area"),
+        (G.Region(sq(2, 2)), "wrong un"),
+        (G.Region([(0, 0), (80, 0), (80, 0.4), (0, 0.4)]), "3 m across"),
+        (G.Region(sq(50, 30), [sq(10, 10, 100, 100)]), "not inside"),
+        (G.Region(sq(30, 20), [sq(60, 50)]), "not inside"),
+        (G.Region([(0, 0), (10, 0), (10, 0), (0, 0)]), "three separate"),
+    ]
+    for region, wanted in cases:
+        faults = G.problems(region)
+        assert faults, "%r should have been refused" % (region.outer[:2],)
+        assert wanted in " ".join(faults), (wanted, faults)
+
+    # and a plain, buildable outline has nothing said against it
+    assert G.problems(G.Region(sq(60, 40), [sq(12, 12)])) == []
+    assert G.problems(G.Region(sq(1000, 1000)), max_area=400000.0)
+
+
+def test_the_engine_names_the_uses_and_shapes_it_knows():
+    """An unknown word is answered with the list, not a KeyError."""
+    for kwargs in ({"use": "submarine"}, {"shape": "trapezoid"}):
+        with pytest.raises(ValueError) as e:
+            B.Spec(**kwargs)
+        assert "knows are" in str(e.value)
+    r = client.post("/v1/generate", json={
+        "spec": {"use": "submarine", "storeys": 2, "area_m2": 900}})
+    assert r.status_code == 422 and "submarine" in r.json()["detail"]
+
+
+def test_the_cost_of_a_request_is_measured_in_sheets_not_floor_area():
+    """A tall tower on a small plate is little building and much drawing."""
+    from archiai.service import generate as GEN
+    per = GEN.estimate_sheets(2) - GEN.estimate_sheets(1)
+    assert per >= 6                           # every discipline draws a plan
+    many = GEN.estimate_sheets(50)
+    assert many - GEN.estimate_sheets(1) == 49 * per
+    assert GEN.estimate_sheets(50, ["architecture"]) < many
+
+    with pytest.raises(GEN.Refused) as e:
+        GEN._guard(50, 500.0, ["architecture"])    # a 10 m2 plate, 50 up
+    assert "too small to plan" in str(e.value)
+
+    from archiai.service.config import settings
+    was = settings.max_sheets
+    settings.max_sheets = 40
+    try:
+        with pytest.raises(GEN.Refused) as e:
+            GEN._guard(30, 30000.0)
+        assert "sheets" in str(e.value) and "fewer storeys" in str(e.value)
+        # the same building drawn by one discipline is under the same cap
+        GEN._guard(4, 4000.0, ["architecture"])
+    finally:
+        settings.max_sheets = was
+
+
+def test_a_picture_that_is_not_a_drawing_is_refused_rather_than_guessed_at():
+    """Grain, a shadow, a photographed screen: none of them are a plan."""
+    import base64, random
+    rnd = random.Random(7)
+    noise = _png([[rnd.randrange(256) for _ in range(120)] for _ in range(90)])
+    for kind, data in (("noise", noise),
+                       ("all black", _png([[5] * 120 for _ in range(90)])),
+                       ("blank", _png([[250] * 120 for _ in range(90)]))):
+        r = client.post("/v1/trace", json={
+            "image": {"data": base64.b64encode(data).decode(), "area_m2": 1500}})
+        assert r.status_code == 422, (kind, r.status_code)
+        assert "Traceback" not in r.json()["detail"]
+
+    # and generating from the same picture is refused too, not built anyway
+    r = client.post("/v1/generate", json={
+        "image": {"data": base64.b64encode(noise).decode(), "area_m2": 1500},
+        "disciplines": ["architecture"], "include_pdf": False,
+        "include_page": False, "turntable": 0})
+    assert r.status_code == 422
+
+
+def test_a_real_sketch_still_reads_after_the_picture_check():
+    """The check must not cost the engine the drawings it can read."""
+    import base64, math
+    shapes = {
+        "rectangle": [[(60, 60), (500, 60), (500, 360), (60, 360)]],
+        "L": [[(60, 60), (500, 60), (500, 200), (260, 200), (260, 360),
+               (60, 360)]],
+        "comb": [[(60, 60), (500, 60), (500, 130), (200, 130), (200, 200),
+                  (500, 200), (500, 270), (200, 270), (200, 340), (500, 340),
+                  (500, 400), (60, 400)]],
+        "round": [[(280 + 190 * math.cos(t * math.pi / 24),
+                    210 + 150 * math.sin(t * math.pi / 24)) for t in range(48)]],
+    }
+    for name, polys in shapes.items():
+        r = client.post("/v1/trace", json={
+            "image": {"data": base64.b64encode(_sketch(polys)).decode(), "area_m2": 1500}})
+        assert r.status_code == 200, (name, r.json())
+        assert len(r.json()["outer"]) >= 3
+
+
+def test_a_tall_building_is_drawn_in_seconds_not_minutes():
+    """Height must not be re-measured once per line of a swept drawing."""
+    import time
+    from archiai.engine import draw_details as DD
+    spec = B.Spec(use="office", storeys=40, area=32000.0, floor_to_floor=3.6)
+    massing, brf = B.build(spec)
+    p = PJ.Project(massing, brf)
+    with tempfile.TemporaryDirectory() as d:
+        t0 = time.time()
+        DD.wall_section_sheet(p, os.path.join(d, "ws.svg"))
+        assert time.time() - t0 < 5.0
+
+    # the mesh is measured once and remembered, and remembering is safe:
+    # adding to it forgets again
+    m = massing.mesh()
+    assert m.bounds() is m.bounds()
+    before = m.bounds()
+    m.quad((0, 0, 999), (1, 0, 999), (1, 1, 999), (0, 1, 999))
+    assert m.bounds()[5] > before[5]
+
+
+def test_solidity_and_raggedness_tell_a_plan_from_a_mess():
+    ring = [(0, 0), (40, 0), (40, 30), (0, 30)]
+    assert abs(G.solidity(ring) - 1.0) < 1e-9
+    assert abs(G.raggedness(ring) - (140 / (1200 ** 0.5))) < 1e-9
+    # a courtyard block's outer ring is still a box; an L is not
+    lsh = G.l_shape(40, 30, 20, 15)
+    assert 0.5 < G.solidity(lsh) < 0.95
+    assert G.raggedness(lsh) > G.raggedness(ring)
