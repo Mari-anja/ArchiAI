@@ -61,12 +61,22 @@ def to_grid(raw):
         raise ValueError(
             "this build reads PNG without extra libraries; send a PNG, or "
             "install Pillow on the server to accept %s" % kind)
-    with Image.open(io.BytesIO(raw)) as im:
-        im = im.convert("L")
-        w, h = im.size
-        if w * h > 40_000_000:
-            raise ValueError("image is too large to trace")
-        px = list(im.getdata())
+    # Pillow raises its own family of errors on a truncated or hostile file,
+    # and none of them are ValueError, so they would escape as a 500 rather
+    # than as a sentence telling the caller what was wrong with their upload.
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            w, h = im.size
+            if w * h > 40_000_000:
+                raise ValueError("image is too large to trace")
+            px = list(im.convert("L").getdata())
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError("could not read this %s: %s. A PNG always works."
+                         % (kind if kind != "unknown" else "image", e))
+    if len(px) < w * h:
+        raise ValueError("this image is truncated; send it again")
     rows = [[px[r * w + c] / 255.0 for c in range(w)] for r in range(h)]
     return w, h, rows
 

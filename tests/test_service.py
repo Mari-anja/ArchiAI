@@ -562,10 +562,17 @@ def test_uploads_are_refused_clearly_when_they_are_not_usable():
         "image": {"data": base64.b64encode(blank).decode(), "area_m2": 500}})
     assert r.status_code == 422
 
+    # a broken image must come back as a sentence, whether or not the server
+    # has Pillow installed to read anything beyond PNG
     jpeg = base64.b64encode(b"\xff\xd8\xff" + b"\x00" * 64).decode()
     r = client.post("/v1/trace", json={"image": {"data": jpeg}})
     assert r.status_code == 422
-    assert "PNG" in r.json()["detail"] or "Pillow" in r.json()["detail"]
+    assert "PNG" in r.json()["detail"]
+
+    truncated = base64.b64encode(_sketch([[(20, 20), (200, 20), (200, 150),
+                                           (20, 150)]])[:400]).decode()
+    r = client.post("/v1/trace", json={"image": {"data": truncated}})
+    assert r.status_code == 422
 
     two = client.post("/v1/generate", json={"brief": "an office",
                                             "image": {"data": "aGk="}})

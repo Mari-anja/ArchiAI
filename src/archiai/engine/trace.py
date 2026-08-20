@@ -69,21 +69,26 @@ def read_png(data):
     if data[:8] != b"\x89PNG\r\n\x1a\n":
         raise ValueError("not a PNG")
     pos, idat, plte, trns, hdr = 8, [], None, None, None
-    while pos < len(data):
-        (ln,) = struct.unpack(">I", data[pos:pos + 4])
-        kind = data[pos + 4:pos + 8]
-        body = data[pos + 8:pos + 8 + ln]
-        pos += 12 + ln
-        if kind == b"IHDR":
-            hdr = struct.unpack(">IIBBBBB", body)
-        elif kind == b"IDAT":
-            idat.append(body)
-        elif kind == b"PLTE":
-            plte = body
-        elif kind == b"tRNS":
-            trns = body
-        elif kind == b"IEND":
-            break
+    try:
+        while pos + 8 <= len(data):
+            (ln,) = struct.unpack(">I", data[pos:pos + 4])
+            kind = data[pos + 4:pos + 8]
+            if pos + 8 + ln > len(data):
+                break                       # a chunk that runs off the end
+            body = data[pos + 8:pos + 8 + ln]
+            pos += 12 + ln
+            if kind == b"IHDR":
+                hdr = struct.unpack(">IIBBBBB", body)
+            elif kind == b"IDAT":
+                idat.append(body)
+            elif kind == b"PLTE":
+                plte = body
+            elif kind == b"tRNS":
+                trns = body
+            elif kind == b"IEND":
+                break
+    except struct.error:
+        raise ValueError("this PNG is corrupt; send it again")
     if not hdr:
         raise ValueError("PNG has no header")
     w, h, depth, ctype, comp, filt, interlace = hdr
@@ -97,7 +102,15 @@ def read_png(data):
     step = depth // 8
     bpp = max(1, nch * step)
     stride = w * bpp
-    raw = zlib.decompress(b"".join(idat))
+    if not idat:
+        raise ValueError("this PNG carries no image data")
+    try:
+        raw = zlib.decompress(b"".join(idat))
+    except zlib.error:
+        raise ValueError("this PNG is truncated or corrupt; send it again")
+    if len(raw) < h * (stride + 1):
+        raise ValueError("this PNG is truncated; %d of %d rows arrived"
+                         % (len(raw) // (stride + 1), h))
     flat = _unfilter(raw, w, h, bpp, stride)
 
     rows = []
