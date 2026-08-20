@@ -13,6 +13,7 @@ from ..engine import massing as M
 from ..engine import project as PJ
 from ..engine import export as EX
 from ..engine import revise as RV
+from ..engine import pdf as PDF
 from ..engine import draw
 from . import images as IMG
 from .config import settings
@@ -35,6 +36,10 @@ def _guard(storeys, area):
     if area and storeys * area > settings.max_area * 12:
         raise Refused("storeys x floor area is too large for a single request; "
                       "split the scheme or raise ARCHIAI_MAX_AREA_M2")
+
+
+def num_of(project):
+    return project.info.get("number", "project")
 
 
 def _with_source(project, source):
@@ -240,6 +245,25 @@ def build_all(req, tmp_root):
     views = render_views(project, req.views or [])
     artefacts.extend(views)
 
+    if getattr(req, "include_pdf", True):
+        pages = [a["data"].decode("utf-8") for a in artefacts
+                 if a["kind"] in ("drawing", "view")]
+        if pages:
+            buf = io.BytesIO()
+            PDF.write(pages, buf,
+                      title="%s — %s" % (project.info.get("name", "Project"),
+                                         project.info.get("number", "")),
+                      author=project.info.get("architect", "ArchiAI"),
+                      subject=project.info.get("subtitle", ""))
+            artefacts.append({
+                "kind": "document", "number": None,
+                "title": "Drawing set", "filename": "%s-drawings.pdf" % num_of(project),
+                "data": buf.getvalue(), "content_type": "application/pdf",
+                "width": 0, "height": 0,
+                "meta": {"format": "pdf", "pages": len(pages),
+                         "paper": "A1 sheets", "vector": True},
+            })
+
     sheet_index = [{"number": a["number"], "title": a["title"],
                     "filename": a["filename"], "paper": "A1",
                     "scale": a["meta"].get("scale"),
@@ -251,6 +275,10 @@ def build_all(req, tmp_root):
     if views:
         man["views"] = [{"number": v["number"], "title": v["title"],
                          "filename": v["filename"], **v["meta"]} for v in views]
+    docs = [a for a in artefacts if a["kind"] == "document"]
+    if docs:
+        man["documents"] = [{"filename": d["filename"], **d["meta"]}
+                            for d in docs]
     if notes is not None:
         man["revision"] = {
             "of": (req.source or {}).get("revision", "P01"),

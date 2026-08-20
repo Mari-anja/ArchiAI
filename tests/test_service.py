@@ -895,3 +895,151 @@ def test_a_revision_is_a_full_project_with_its_pictures():
     with open(os.path.join(settings.local_root, sheet["key"])) as fh:
         svg = fh.read()
     assert "P02" in svg and "P01" not in svg
+
+
+# --- handing it to someone: the PDF ----------------------------------------
+
+def _pdf_objects(data):
+    """Every object body, keyed by number, so the file can be checked without
+    a PDF library."""
+    import re as _re
+    out = {}
+    for m in _re.finditer(rb"(\d+) 0 obj\r?\n(.*?)\r?\nendobj", data, _re.S):
+        out[int(m.group(1))] = m.group(2)
+    return out
+
+
+def _pdf_check(data):
+    """Structural sanity: a PDF that says it has objects it does not have will
+    not open, and a viewer will not tell you which one was missing."""
+    import re as _re
+    import zlib as _zlib
+    assert data.startswith(b"%PDF-1."), "not a PDF"
+    assert data.rstrip().endswith(b"%%EOF")
+    objs = _pdf_objects(data)
+    assert objs, "no objects"
+    size = int(_re.search(rb"/Size (\d+)", data).group(1))
+    assert max(objs) < size
+    # every indirect reference resolves
+    for num, body in objs.items():
+        for ref in _re.findall(rb"(\d+) 0 R", body):
+            assert int(ref) in objs, "object %d points at missing %s" % (num, ref)
+    # every named resource a page uses is declared in that page
+    pages = [b for b in objs.values() if b"/Type /Page" in b and b"/Pages" not in b]
+    assert pages, "no pages"
+    for page in pages:
+        content = int(_re.search(rb"/Contents (\d+) 0 R", page).group(1))
+        stream = objs[content]
+        body = stream.split(b"stream\n", 1)[1].rsplit(b"\nendstream", 1)[0]
+        if b"/FlateDecode" in stream:
+            body = _zlib.decompress(body)
+        for name in set(_re.findall(rb"/((?:Pt|Sh|GS|F)\d+)\s", body)):
+            assert b"/" + name + b" " in page, \
+                "page uses /%s but does not declare it" % name.decode()
+    return objs
+
+
+def test_a_sheet_becomes_a_pdf_page_at_true_paper_size():
+    from archiai.engine import pdf as P
+    import io as _io
+    b = M.Extrusion(FOOTPRINTS["courtyard"], storeys=3, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="pdf"), {"number": "T"})
+    with tempfile.TemporaryDirectory() as d:
+        register = p.build(d, disciplines=["architecture"])
+        buf = _io.BytesIO()
+        P.write([path for (_n, _t, _s, path) in register], buf, title="Set")
+        data = buf.getvalue()
+    objs = _pdf_check(data)
+    # A1 is 841 x 594 mm, which is 2383.9 x 1683.8 points
+    boxes = [b for b in objs.values() if b"/MediaBox" in b]
+    assert boxes, "no MediaBox"
+    for box in boxes:
+        nums = [float(v) for v in
+                box.split(b"/MediaBox [")[1].split(b"]")[0].split()]
+        assert abs(nums[2] - 841 * 72 / 25.4) < 0.5
+        assert abs(nums[3] - 594 * 72 / 25.4) < 0.5
+    assert len(boxes) == len(register)
+    # the text is real text, not outlines
+    assert b"/BaseFont /Helvetica" in data
+
+
+def test_a_render_gets_a_page_it_fits_on():
+    from archiai.engine import pdf as P
+    from archiai.engine import view as V
+    import io as _io
+    b = M.Extrusion(FOOTPRINTS["slab"], storeys=4, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="v"), {"number": "T"})
+    svg = V.render(p, "aerial-ne", width=1600, height=1000)
+    conv = P.Converter(svg)
+    assert conv.page_w <= 420.1 and conv.page_h <= 297.1
+    assert abs(conv.page_w / conv.page_h - 1.6) < 0.01      # aspect held
+    buf = _io.BytesIO()
+    P.write([svg], buf)
+    _pdf_check(buf.getvalue())
+
+
+def test_arcs_and_paths_convert_to_something_that_ends_where_it_should():
+    from archiai.engine import pdf as P
+    ops = P.path_ops("M 100 50 A 50 50 0 0 1 150 100")
+    assert ops[0] == "100 50 m"
+    last = [float(v) for v in ops[-1].split()[:-1]]
+    assert abs(last[-2] - 150) < 0.01 and abs(last[-1] - 100) < 0.01
+    # a full circle drawn as two half arcs closes on itself
+    ops = P.path_ops("M 10 0 A 10 10 0 1 1 -10 0 A 10 10 0 1 1 10 0")
+    last = [float(v) for v in ops[-1].split()[:-1]]
+    assert abs(last[-2] - 10) < 0.05 and abs(last[-1] - 0) < 0.05
+    # relative commands and shorthand curves
+    assert P.path_ops("m 5 5 l 5 0 z") == ["5 5 m", "10 5 l", "h"]
+
+
+def test_text_is_measured_so_it_lands_where_the_svg_puts_it():
+    from archiai.engine import pdf as P
+    # Helvetica: an 'i' is narrow and an 'M' is wide, and bold is wider
+    assert P.text_width("i", 10) < P.text_width("M", 10)
+    assert P.text_width("ABC", 10, bold=True) > P.text_width("ABC", 10)
+    assert abs(P.text_width("", 10)) < 1e-9
+    # letter spacing counts
+    assert abs(P.text_width("AAA", 10, spacing=2.0)
+               - P.text_width("AAA", 10) - 6.0) < 1e-6
+    # the characters the sheets actually use are all measurable
+    for ch in "—·²é³–½°":
+        assert P.text_width(ch, 10) > 0
+
+
+def test_every_sheet_in_a_set_survives_the_conversion():
+    from archiai.engine import pdf as P
+    import io as _io
+    for name in ("slab", "courtyard", "hexagon", "ring"):
+        b = M.Extrusion(FOOTPRINTS[name], storeys=2, floor_to_floor=3.9)
+        p = PJ.Project(b, L.Brief(name=name), {"number": "T"})
+        with tempfile.TemporaryDirectory() as d:
+            register = p.build(d)
+            buf = _io.BytesIO()
+            P.write([path for (_n, _t, _s, path) in register], buf)
+            _pdf_check(buf.getvalue())
+
+
+def test_the_service_returns_the_whole_set_as_one_pdf():
+    r = client.post("/v1/generate", json={
+        "brief": "a 3 storey office of 3000 m2 with a courtyard",
+        "disciplines": ["architecture"],
+        "views": [{"name": "aerial-ne", "width": 800, "height": 500}]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    docs = [a for a in body["assets"] if a["kind"] == "document"]
+    assert len(docs) == 1
+    doc = docs[0]
+    assert doc["content_type"] == "application/pdf"
+    assert doc["meta"]["vector"] is True
+    drawings = sum(1 for a in body["assets"] if a["kind"] == "drawing")
+    assert doc["meta"]["pages"] == drawings + 1          # sheets plus the view
+    assert body["manifest"]["documents"][0]["pages"] == doc["meta"]["pages"]
+
+    from archiai.service.config import settings
+    with open(os.path.join(settings.local_root, doc["key"]), "rb") as fh:
+        _pdf_check(fh.read())
+
+    off = client.post("/v1/generate", json={
+        "brief": "a 2 storey office of 1200 m2", "disciplines": ["architecture"],
+        "include_pdf": False})
+    assert not [a for a in off.json()["assets"] if a["kind"] == "document"]

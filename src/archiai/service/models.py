@@ -162,6 +162,7 @@ class ReviseRequest(BaseModel):
     client: Optional[str] = None
     idempotency_key: Optional[str] = None
     include_model: bool = True
+    include_pdf: bool = True
     elevations: List[float] = Field(default_factory=lambda: [270.0, 0.0, 90.0, 180.0])
     disciplines: Optional[List[str]] = None
     views: Optional[List[ViewSpec]] = Field(None, max_length=12)
@@ -173,6 +174,8 @@ class GenerateRequest(_Inputs):
     client: Optional[str] = None
     idempotency_key: Optional[str] = None
     include_model: bool = True
+    include_pdf: bool = Field(True, description="Also return the whole set as "
+                                                "one PDF at true paper size")
     elevations: List[float] = Field(default_factory=lambda: [270.0, 0.0, 90.0, 180.0])
     disciplines: Optional[List[str]] = Field(
         None, description="Subset of architecture, structure, electrical, "
