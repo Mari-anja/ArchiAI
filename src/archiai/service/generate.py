@@ -15,6 +15,7 @@ from ..engine import export as EX
 from ..engine import revise as RV
 from ..engine import pdf as PDF
 from ..engine import webpage as WEB
+from ..engine import photoreal as PR
 from ..engine import draw
 from . import images as IMG
 from .config import settings
@@ -200,6 +201,89 @@ def assemble_revision(req):
                         new_source.get("footprint") or {}).get("name") or ""
     project = _with_source(PJ.Project(massing, brf, info), new_source)
     return spec, project, notes
+
+
+def render_photoreal(project, shots):
+    """Control images, a description, and a finished image where one can be made.
+
+    The controls come back either way. They are the part that took the model to
+    produce and the part that stays useful whichever service is chosen."""
+    out = []
+    try:
+        engine = PR.backend(settings.image_backend)
+    except PR.NotConfigured as e:
+        raise Refused(str(e))
+    for i, s in enumerate(shots):
+        cam = {k: v for k, v in (("azimuth", s.azimuth), ("elevation", s.elevation),
+                                 ("distance", s.distance),
+                                 ("eye_height", s.eye_height)) if v is not None}
+        try:
+            pack = PR.package(
+                project, name=s.name, width=s.width, height=s.height,
+                addons=tuple(s.addons) if s.addons is not None
+                else VW_DEFAULT_ADDONS,
+                which=tuple(s.controls), latitude=s.latitude, day=s.day_of_year,
+                hour=s.hour, sky=s.sky, style_note=s.style_note, seed=s.seed,
+                **cam)
+        except ValueError as e:
+            raise Refused(str(e))
+
+        tag = "%02d-%s" % (i + 1, s.name.replace("/", "-"))
+        meta_common = {"shot": s.name, "label": s.label or s.name,
+                       "sun": pack["view"]["sun"], "seed": s.seed}
+        out.append({
+            "kind": "view", "number": "P-%03d" % (i + 1),
+            "title": "%s — base" % (s.label or s.name),
+            "filename": "photoreal-%s-base.svg" % tag,
+            "data": pack["base"].encode("utf-8"),
+            "content_type": "image/svg+xml", "width": s.width, "height": s.height,
+            "meta": dict(meta_common, role="base", **pack["view"]),
+        })
+        for kind, svg in pack["controls"].items():
+            out.append({
+                "kind": "control", "number": "P-%03d" % (i + 1),
+                "title": "%s — %s" % (s.label or s.name, kind),
+                "filename": "photoreal-%s-%s.svg" % (tag, kind),
+                "data": svg.encode("utf-8"), "content_type": "image/svg+xml",
+                "width": s.width, "height": s.height,
+                "meta": dict(meta_common, role="control", control=kind,
+                             note=pack["control_notes"][kind]),
+            })
+        try:
+            data, content_type = engine.generate(
+                pack["prompt"], pack["controls"], negative=pack["negative_prompt"],
+                width=s.width, height=s.height, seed=s.seed)
+            out.append({
+                "kind": "photoreal", "number": "P-%03d" % (i + 1),
+                "title": s.label or s.name,
+                "filename": "photoreal-%s.png" % tag, "data": data,
+                "content_type": content_type, "width": s.width,
+                "height": s.height,
+                "meta": dict(meta_common, role="photoreal",
+                             service=engine.name, prompt=pack["prompt"]),
+            })
+        except PR.NotConfigured as e:
+            out.append({
+                "kind": "recipe", "number": "P-%03d" % (i + 1),
+                "title": "%s — recipe" % (s.label or s.name),
+                "filename": "photoreal-%s.json" % tag,
+                "data": json.dumps({
+                    "prompt": pack["prompt"],
+                    "negative_prompt": pack["negative_prompt"],
+                    "controls": {k: "photoreal-%s-%s.svg" % (tag, k)
+                                 for k in pack["controls"]},
+                    "control_notes": pack["control_notes"],
+                    "size": pack["size"], "seed": s.seed,
+                    "view": pack["view"], "reason": str(e),
+                }, indent=2).encode("utf-8"),
+                "content_type": "application/json", "width": 0, "height": 0,
+                "meta": dict(meta_common, role="recipe", service="none"),
+            })
+    return out
+
+
+VW_DEFAULT_ADDONS = ("ground", "sky", "shadow", "context", "trees", "cars",
+                     "people")
 
 
 def build_all(req, tmp_root):

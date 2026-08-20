@@ -1145,3 +1145,174 @@ def test_the_service_returns_the_page_as_a_document():
         "brief": "a 2 storey office of 1200 m2", "disciplines": ["architecture"],
         "include_page": False, "include_pdf": False})
     assert not [a for a in off.json()["assets"] if a["kind"] == "document"]
+
+
+# --- preparing a photoreal pass ---------------------------------------------
+
+def _fills(svg):
+    import re as _re
+    return set(_re.findall(r'fill="(#[0-9a-fA-F]{6})"', svg))
+
+
+def test_each_pass_says_something_different_about_the_same_view():
+    from archiai.engine import view as V
+    b = M.Extrusion(FOOTPRINTS["courtyard"], storeys=4, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="pass"), {"number": "T"})
+    kw = dict(addons=("ground", "context", "trees"), width=600, height=380)
+    out = {k: V.render(p, "aerial-ne", style=k, **kw) for k in V.PASSES}
+    assert len(set(out.values())) == len(V.PASSES), "two passes came out alike"
+
+    # depth runs from near-bright to far-dark, and is grey all the way
+    greys = _fills(out["depth"])
+    assert len(greys) > 20, "depth has only %d levels" % len(greys)
+    for g in greys:
+        assert g[1:3] == g[3:5] == g[5:7], "depth is not grey: %s" % g
+    vals = sorted(int(g[1:3], 16) for g in greys)
+    assert vals[0] < 60 and vals[-1] > 200, "depth range is %s..%s" % (
+        vals[0], vals[-1])
+
+    # segmentation uses only the agreed colours
+    allowed = {V._hex(c) for c in V.SEGMENT.values()} | {V._hex(V.SEGMENT_SKY)}
+    assert _fills(out["segment"]) <= allowed, \
+        "unexpected colours: %s" % (_fills(out["segment"]) - allowed)
+
+    # a line pass is line work, not fills
+    assert out["line"].count("stroke=") > 200
+    assert _fills(out["line"]) <= {"#ffffff"}
+
+
+def test_the_passes_line_up_with_each_other_and_with_the_render():
+    """They are only useful as controls if they are the same camera."""
+    from archiai.engine import photoreal as PR
+    b = M.Extrusion(FOOTPRINTS["slab"], storeys=5, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="align"), {"number": "T"})
+    pack = PR.package(p, "eye-south", width=640, height=400)
+    sizes = {tuple(_svg_size(v)) for v in pack["controls"].values()}
+    sizes.add(tuple(_svg_size(pack["base"])))
+    assert sizes == {(640, 400)}, "the controls are not one camera: %s" % sizes
+    # and the silhouette agrees: the same faces are drawn in each
+    counts = {k: v.count("<path") for k, v in pack["controls"].items()}
+    assert max(counts.values()) - min(counts.values()) < max(counts.values()) * 0.6
+
+
+def _svg_size(svg):
+    import re as _re
+    m = _re.search(r'viewBox="0 0 (\d+) (\d+)"', svg)
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def test_the_description_is_written_from_the_model():
+    from archiai.engine import photoreal as PR
+    b = M.Extrusion(FOOTPRINTS["courtyard"], storeys=7, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="words", use="office"), {"number": "T"})
+    text = PR.describe(p, "entrance", hour=9.0, sky="clear",
+                       addons=("context", "trees", "people"))
+    assert "7 storey" in text and "office" in text
+    assert "%.0f metres" % b.height in text
+    assert "courtyard" in text                     # this plate has one
+    assert "morning" in text and "clear sky" in text
+    assert "street trees" in text and "people" in text
+    # it describes what a camera would see, not what a specification says
+    for jargon in ("carrier rail", "inner leaf", "dense block", "rainscreen"):
+        assert jargon not in text, "%r leaked into the description" % jargon
+
+    solid = PJ.Project(M.Extrusion(FOOTPRINTS["slab"], storeys=2,
+                                   floor_to_floor=3.9),
+                       L.Brief(name="solid"), {"number": "T"})
+    assert "courtyard" not in PR.describe(solid, "eye-north")
+    # the same building, described the same way, every time
+    assert PR.describe(p, "entrance") == PR.describe(p, "entrance")
+
+
+def test_the_image_service_is_a_seam_that_can_be_closed_in_one_adapter():
+    from archiai.engine import photoreal as PR
+    b = M.Extrusion(FOOTPRINTS["slab"], storeys=3, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="seam"), {"number": "T"})
+    pack = PR.package(p, "aerial-ne", width=512, height=384,
+                      which=("depth", "line"))
+    assert set(pack["controls"]) == {"depth", "line"}
+    assert pack["prompt"] and pack["negative_prompt"]
+
+    with pytest.raises(PR.NotConfigured):
+        PR.backend("none").generate(pack["prompt"], pack["controls"])
+    with pytest.raises(PR.NotConfigured):
+        PR.backend("a-service-that-does-not-exist")
+
+    seen = {}
+
+    class Fake(PR.Backend):
+        name = "fake"
+
+        def generate(self, prompt, controls, negative=None, width=1280,
+                     height=800, seed=None, strength=0.75, options=None):
+            seen.update(prompt=prompt, controls=sorted(controls), seed=seed)
+            return b"\x89PNG\r\n\x1a\nfake", "image/png"
+
+    PR.register("fake", Fake)
+    try:
+        data, ct = PR.backend("fake").generate(pack["prompt"], pack["controls"],
+                                               seed=7)
+        assert ct == "image/png" and data.startswith(b"\x89PNG")
+        assert seen["controls"] == ["depth", "line"] and seen["seed"] == 7
+    finally:
+        PR._BACKENDS.pop("fake", None)
+
+
+def test_the_endpoint_returns_the_controls_whether_or_not_it_can_generate():
+    r = client.post("/v1/photoreal", json={
+        "brief": "a 4 storey office of 5000 m2 with a courtyard",
+        "shots": [{"name": "entrance", "width": 512, "height": 384,
+                   "controls": ["depth", "line"], "label": "Arrival"}]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "controls_only"
+    kinds = body["manifest"]["produced"]
+    assert kinds == {"view": 1, "control": 2, "recipe": 1}
+    controls = [a for a in body["assets"] if a["kind"] == "control"]
+    assert {a["meta"]["control"] for a in controls} == {"depth", "line"}
+    assert all(a["meta"]["sun"]["altitude_deg"] > 0 for a in controls)
+
+    from archiai.service.config import settings
+    recipe = next(a for a in body["assets"] if a["kind"] == "recipe")
+    with open(os.path.join(settings.local_root, recipe["key"])) as fh:
+        spec = json.load(fh)
+    assert "prompt" in spec and "negative_prompt" in spec
+    assert set(spec["controls"]) == {"depth", "line"}
+    assert "no image service is configured" in spec["reason"]
+
+    bad = client.post("/v1/photoreal", json={
+        "brief": "an office", "shots": [{"name": "aerial-ne",
+                                         "controls": ["x-ray"]}]})
+    assert bad.status_code == 422 and "x-ray" in bad.json()["detail"]
+
+
+def test_a_configured_image_service_is_used_when_there_is_one(monkeypatch):
+    from archiai.engine import photoreal as PR
+    from archiai.service import generate as gen
+    from archiai.service.config import settings
+
+    class Fake(PR.Backend):
+        name = "fake"
+
+        def generate(self, prompt, controls, negative=None, width=1280,
+                     height=800, seed=None, strength=0.75, options=None):
+            assert "storey" in prompt
+            return b"\x89PNG\r\n\x1a\nfake-bytes", "image/png"
+
+    PR.register("fake", Fake)
+    monkeypatch.setattr(settings, "image_backend", "fake")
+    try:
+        r = client.post("/v1/photoreal", json={
+            "brief": "a 3 storey office of 3000 m2",
+            "shots": [{"name": "aerial-ne", "width": 512, "height": 384,
+                       "controls": ["depth"]}]})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["status"] == "complete"
+        assert body["manifest"]["image_service"] == "fake"
+        shot = next(a for a in body["assets"] if a["kind"] == "photoreal")
+        assert shot["content_type"] == "image/png"
+        assert shot["meta"]["service"] == "fake" and shot["meta"]["prompt"]
+        assert not [a for a in body["assets"] if a["kind"] == "recipe"]
+    finally:
+        PR._BACKENDS.pop("fake", None)

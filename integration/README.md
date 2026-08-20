@@ -206,6 +206,49 @@ It returns what the engine understood **and what it had to assume**:
 Show those assumptions before charging. It is the difference between a user
 feeling the tool understood them and a user feeling it guessed.
 
+## Photoreal renders
+
+Anthropic's API reads images but does not make them, so a photoreal pass needs
+a third-party image service. Everything up to that decision is built.
+
+`POST /v1/photoreal` takes the same four inputs plus a list of shots, and
+returns, for each one:
+
+- the **deterministic render** — already the right building in the right light;
+- **control images** the model can state exactly and a photograph can only be
+  guessed from: `depth` (distance from the camera, near bright), `normal`
+  (surface direction in camera space), `segment` (one flat colour per
+  material), `line` (hidden-line-removed edges). All four are the same camera,
+  so they line up;
+- a **description written from the model** — storeys, height, what the facade
+  is made of, glazing ratio, time of day, what is in shot — and a negative
+  prompt.
+
+With no service configured it returns `status: "controls_only"` and a `recipe`
+JSON per shot holding the prompt and the control filenames, so you can drive
+whichever service you like from it. With one configured it also returns the
+finished image and `status: "complete"`.
+
+**Wiring a service in** is one adapter. Subclass `Backend`, implement one
+method, register it, and set `ARCHIAI_IMAGE_BACKEND`:
+
+```python
+from archiai.engine import photoreal as PR
+
+class MyService(PR.Backend):
+    name = "my-service"
+
+    def generate(self, prompt, controls, negative=None, width=1280,
+                 height=800, seed=None, strength=0.75, options=None):
+        # controls is {"depth": <svg str>, "normal": ..., ...}
+        return image_bytes, "image/png"
+
+PR.register("my-service", MyService)
+```
+
+Nothing about the building changes when the service does: the camera, the
+light, the controls and the description are all settled before it is called.
+
 ## Notes and limits
 
 - **Idempotency is in-memory in the engine**, so it only holds within one

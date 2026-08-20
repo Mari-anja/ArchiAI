@@ -137,6 +137,39 @@ class ViewRequest(_Inputs):
     idempotency_key: Optional[str] = None
 
 
+class PhotorealSpec(BaseModel):
+    """One photoreal image, or the makings of one."""
+    name: str = "aerial-ne"
+    width: int = Field(1280, ge=512, le=2048)
+    height: int = Field(800, ge=384, le=2048)
+    addons: Optional[List[str]] = None
+    controls: List[str] = Field(default_factory=lambda:
+                                ["depth", "normal", "segment", "line"])
+    latitude: float = Field(51.5, ge=-66.0, le=66.0)
+    day_of_year: int = Field(172, ge=1, le=366)
+    hour: float = Field(14.0, ge=0.0, le=24.0)
+    sky: str = "day"
+    azimuth: Optional[float] = None
+    elevation: Optional[float] = None
+    distance: Optional[float] = Field(None, gt=0)
+    eye_height: Optional[float] = Field(None, gt=0, le=400.0)
+    style_note: Optional[str] = Field(None, description="Anything to add to "
+                                                        "the description")
+    seed: Optional[int] = None
+    label: Optional[str] = None
+
+
+class PhotorealRequest(_Inputs):
+    """Prepare a photoreal pass for a building.
+
+    Always returns the control images and the description. Returns a finished
+    image as well when an image service is configured on the server."""
+    shots: List[PhotorealSpec] = Field(..., min_length=1, max_length=6)
+    project_id: Optional[str] = None
+    number: Optional[str] = None
+    idempotency_key: Optional[str] = None
+
+
 class ReviseRequest(BaseModel):
     """The same building with one thing changed.
 

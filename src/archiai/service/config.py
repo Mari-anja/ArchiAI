@@ -24,10 +24,14 @@ class Settings:
         self.max_storeys = int(os.environ.get("ARCHIAI_MAX_STOREYS", "60"))
         self.max_area = float(os.environ.get("ARCHIAI_MAX_AREA_M2", "400000"))
         self.request_timeout = float(os.environ.get("ARCHIAI_UPLOAD_TIMEOUT", "30"))
+        # Which image service runs the photoreal pass. "none" still returns the
+        # control images and the description, which is the reusable part.
+        self.image_backend = os.environ.get("ARCHIAI_IMAGE_BACKEND", "none").strip()
 
     def describe(self):
         return {"storage": self.backend,
                 "auth": "open" if self.allow_anonymous else "bearer",
+                "images": self.image_backend,
                 "bucket": self.supabase_bucket if self.backend == "supabase" else None}
 
 

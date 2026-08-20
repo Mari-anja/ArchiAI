@@ -164,7 +164,27 @@ STYLES = {
     "clay":     (206, 202, 195),
     "white":    (238, 236, 232),
     "line":     None,                       # outlines only
+    # Passes. Not pictures to look at: pictures for a machine to read. An
+    # image model is conditioned on structure, and these are the structure
+    # the engine already knows exactly -- how far away a surface is, which
+    # way it faces, and what it is made of. Guessing them back out of a
+    # photograph is the hard part everyone else has to do.
+    "depth":    None,
+    "normal":   None,
+    "segment":  None,
 }
+PASSES = ("depth", "normal", "segment", "line")
+
+# One flat colour per material, far apart from each other so a segmentation
+# map can be read back without ambiguity.
+SEGMENT = {
+    "glass": (60, 120, 200), "spandrel": (120, 90, 190), "wall": (200, 90, 60),
+    "soffit": (150, 60, 40), "roof": (230, 170, 40), "parapet": (200, 140, 30),
+    "slab": (240, 220, 120), "ground": (70, 160, 70), "paving": (150, 150, 150),
+    "context": (110, 110, 130), "tree": (40, 200, 90), "trunk": (90, 70, 40),
+    "car": (230, 60, 140), "person": (250, 250, 60), "shadow": (0, 0, 0),
+}
+SEGMENT_SKY = (18, 18, 24)
 
 
 def _hex(c):
@@ -237,12 +257,18 @@ class Scene:
                     for c in range(n):
                         self._emit_face(_patch(pts, c / n, r / n,
                                                (c + 1) / n, (r + 1) / n),
-                                        material, cull, stroke, w, flat, layer)
+                                        material, cull, stroke, w, flat, layer,
+                                        outline=False)
+                if self.style == "line":
+                    # the patches carry the occlusion; the real edge is the
+                    # edge of the face, drawn once over the top of them
+                    self._emit_face(pts, material, cull, "#20242a", 0.7,
+                                    "none", layer, outline=True)
                 return
         self._emit_face(pts, material, cull, stroke, w, flat, layer)
 
     def _emit_face(self, pts, material, cull=True, stroke=None, w=0.5,
-                   flat=None, layer=0):
+                   flat=None, layer=0, outline=None):
         cam = self.cam
         cpts = [cam.to_cam(p) for p in pts]
         cpts = cam.clip(cpts)
@@ -256,22 +282,20 @@ class Scene:
         if not _visible(xy, cam):
             return
         depth = sum(c[2] for c in cpts) / len(cpts)
-        base, gloss = MATERIALS.get(material, MATERIALS["wall"])
-        if self.style in ("clay", "white"):
-            base, gloss = STYLES[self.style], 0.0
-        if flat:
-            fill = flat
-        elif self.style == "line":
-            fill = "#ffffff"
-        else:
-            fill = _shade(base, n, self.sun, self.alt, gloss, toward)
-        if self.style == "line" and stroke is None:
+        fill = self.paint(n, material, toward, depth, flat)
+        if self.style == "line" and outline is False:
+            stroke, w = None, 0.0          # a patch only occludes
+        elif self.style == "line" and stroke is None:
             stroke, w = "#20242a", 0.7
+        elif isinstance(fill, tuple):
+            stroke, w = None, 0.0          # a pass carries no line work
         elif stroke is None:
             stroke, w = fill, 0.6          # hairline seams between patches
         self.items.append((layer, depth, xy, fill, stroke, w))
 
     def flat_face(self, pts, fill, stroke=None, w=0.0, layer=-1):
+        if self.style in ("depth", "normal", "segment"):
+            return                        # a cast shadow is not a surface
         cam = self.cam
         cpts = cam.clip([cam.to_cam(p) for p in pts])
         if len(cpts) < 3:
@@ -282,10 +306,50 @@ class Scene:
         depth = sum(c[2] for c in cpts) / len(cpts)
         self.items.append((layer, depth, xy, fill, stroke, w))
 
+    def paint(self, n, material, toward, depth, flat=None):
+        """The colour of one face, whatever the style. Everything that draws a
+        surface goes through here; a surface that does not is a hole in the
+        pass, and a hole in a control image is worse than no control image."""
+        if self.style in ("depth", "normal", "segment"):
+            return ("pass", self.style, depth, n, material)
+        if flat:
+            return flat
+        if self.style == "line":
+            return "#ffffff"
+        base, gloss = MATERIALS.get(material, MATERIALS["wall"])
+        if self.style in ("clay", "white"):
+            base, gloss = STYLES[self.style], 0.0
+        return _shade(base, n, self.sun, self.alt, gloss, toward)
+
+    def _resolve(self, fill):
+        """A pass face turned into a colour, once the depth range is known."""
+        _tag, style, depth, n, material = fill
+        if style == "segment":
+            return _hex(SEGMENT.get(material, (128, 128, 128)))
+        if style == "normal":
+            # camera space, so the encoding means the same thing from any view
+            cam = self.cam
+            v = (_dot(n, cam.r), _dot(n, cam.u), -_dot(n, cam.f))
+            return _hex([(c * 0.5 + 0.5) * 255.0 for c in v])
+        lo, hi = self._range
+        t = 1.0 - (depth - lo) / max(hi - lo, 1e-6)     # near is bright
+        t = max(0.0, min(1.0, t)) ** 0.65               # spread the near field
+        return _hex([t * 255.0] * 3)
+
     def emit(self):
         out = []
+        # The ground runs to the horizon. Letting it set the far plane squashes
+        # the whole building into the brightest one percent of the range, which
+        # is a depth map of a field with a smudge on it.
+        depths = [it[1] for it in self.items
+                  if isinstance(it[3], tuple) and it[0] > -3]
+        if not depths:
+            depths = [it[1] for it in self.items if isinstance(it[3], tuple)]
+        self._range = (min(depths), max(depths)) if depths else (0.0, 1.0)
         for (layer, depth, geom, fill, stroke, w) in sorted(
                 self.items, key=lambda it: (it[0], -it[1])):
+            if isinstance(fill, tuple) and fill and fill[0] == "pass":
+                fill = self._resolve(fill)
             rule = ""
             if isinstance(geom, tuple) and geom and geom[0] == "evenodd":
                 d, rule = geom[1], ' fill-rule="evenodd"'
@@ -325,15 +389,10 @@ def _face_with_holes(scene, outer, holes, material):
         ch = cam.clip([cam.to_cam(p) for p in h])
         if len(ch) >= 3:
             parts.append(_path([cam.project(c) for c in ch]))
-    base, gloss = MATERIALS.get(material, MATERIALS["wall"])
-    if scene.style in ("clay", "white"):
-        base, gloss = STYLES[scene.style], 0.0
-    fill = "#ffffff" if scene.style == "line" else _shade(
-        base, n, scene.sun, scene.alt, gloss, toward)
     depth = sum(c[2] for c in co) / len(co)
+    fill = scene.paint(n, material, toward, depth)
     stroke = "#20242a" if scene.style == "line" else None
-    scene.items.append((0, depth, None, fill, stroke, 0.7))
-    scene.items[-1] = (0, depth, ("evenodd", " ".join(parts)), fill, stroke, 0.7)
+    scene.items.append((0, depth, ("evenodd", " ".join(parts)), fill, stroke, 0.7))
 
 
 # ---------------------------------------------------------------------------
@@ -706,12 +765,14 @@ def people(scene, project, count=9, seed=4):
                 (f2[0] + w * 0.50, sh + ph * 0.06),
                 (f2[0] + w * 0.16, f2[1] - ph * 0.42),
                 (f2[0] + w * 0.30, f2[1])]
-        scene.items.append((1, foot[2], body, "#4b5058", None, 0.0))
+        facing = _mul(cam.f, -1.0)
+        fill = scene.paint(facing, "person", cam.f, foot[2], flat="#4b5058")
+        scene.items.append((1, foot[2], body, fill, None, 0.0))
         hr = ph * 0.075
         hy = h2[1] + hr
         head = [(f2[0] + hr * math.cos(2 * math.pi * k / 10),
                  hy + hr * math.sin(2 * math.pi * k / 10)) for k in range(10)]
-        scene.items.append((1, foot[2] - 0.01, head, "#4b5058", None, 0.0))
+        scene.items.append((1, foot[2] - 0.01, head, fill, None, 0.0))
 
 
 # ---------------------------------------------------------------------------
@@ -910,7 +971,13 @@ def render(project, name="aerial-ne", style="material", addons=None,
         people(sc, project)
 
     body = sc.emit()
-    head = _sky_svg(cam, "none" if style == "line" else sky)
+    if style in PASSES:
+        back = {"depth": "#000000", "normal": "#7f7fff",
+                "segment": _hex(SEGMENT_SKY), "line": "#ffffff"}[style]
+        head = '<rect width="%.0f" height="%.0f" fill="%s"/>' % (
+            cam.width, cam.height, back)
+    else:
+        head = _sky_svg(cam, sky)
     return ('<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" '
             'viewBox="0 0 %d %d">%s%s</svg>'
             % (int(width), int(height), int(width), int(height), head, body))

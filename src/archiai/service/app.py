@@ -24,7 +24,8 @@ from .config import settings
 from .storage import make_storage
 from .models import (GenerateRequest, GenerateResponse, ParseRequest,
                      ParseResponse, TraceRequest, TraceResponse, ViewRequest,
-                     ReviseRequest, Asset)
+                     ReviseRequest, PhotorealRequest,
+                     Asset)
 from . import generate as gen
 from . import images as IMG
 
@@ -221,6 +222,54 @@ async def view(req: ViewRequest, _=Depends(require_key)):
                   "views": [{"number": v["number"], "title": v["title"],
                              "filename": v["filename"], **v["meta"]}
                             for v in views]})
+    if req.idempotency_key:
+        _remember(req.idempotency_key, body)
+    return body
+
+
+@app.post("/v1/photoreal", response_model=GenerateResponse)
+async def photoreal(req: PhotorealRequest, _=Depends(require_key)):
+    """Prepare a photoreal pass, and run it if an image service is configured.
+
+    The control images and the description come back either way. They are what
+    the model can say exactly and a photograph can only be guessed from: how
+    far away each surface is, which way it faces, what it is made of, and where
+    its edges are."""
+    try:
+        req.mode()
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if req.idempotency_key and req.idempotency_key in _idempotent:
+        _idempotent.move_to_end(req.idempotency_key)
+        return _idempotent[req.idempotency_key]
+    t0 = time.time()
+    try:
+        _spec, project = await run_in_threadpool(gen.assemble, req)
+        made = await run_in_threadpool(gen.render_photoreal, project, req.shots)
+    except gen.Refused as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    gen_id = uuid.uuid4().hex
+    prefix = "%s/%s" % (req.project_id or "anonymous", gen_id)
+    assets = await _publish(make_storage(), prefix, made)
+    kinds = {}
+    for a in made:
+        kinds[a["kind"]] = kinds.get(a["kind"], 0) + 1
+    body = GenerateResponse(
+        status="complete" if kinds.get("photoreal") else "controls_only",
+        generation_id=gen_id, project_id=req.project_id,
+        duration_ms=int((time.time() - t0) * 1000),
+        cost_units=len(req.shots) * 4, assets=assets,
+        manifest={"engine": EX.ENGINE_VERSION,
+                  "image_service": settings.image_backend,
+                  "project": {"name": project.info.get("name"),
+                              "number": project.info.get("number"),
+                              "storeys": len(project.massing.levels),
+                              "gia_m2": round(project.gia, 1)},
+                  "shots": [{"number": a["number"], "title": a["title"],
+                             "filename": a["filename"], **a["meta"]}
+                            for a in made],
+                  "produced": kinds})
     if req.idempotency_key:
         _remember(req.idempotency_key, body)
     return body
