@@ -163,6 +163,8 @@ class ReviseRequest(BaseModel):
     idempotency_key: Optional[str] = None
     include_model: bool = True
     include_pdf: bool = True
+    include_page: bool = True
+    turntable: int = Field(8, ge=0, le=24)
     elevations: List[float] = Field(default_factory=lambda: [270.0, 0.0, 90.0, 180.0])
     disciplines: Optional[List[str]] = None
     views: Optional[List[ViewSpec]] = Field(None, max_length=12)
@@ -176,6 +178,10 @@ class GenerateRequest(_Inputs):
     include_model: bool = True
     include_pdf: bool = Field(True, description="Also return the whole set as "
                                                 "one PDF at true paper size")
+    include_page: bool = Field(True, description="Also return one self-contained "
+                                                 "HTML page with everything in it")
+    turntable: int = Field(8, ge=0, le=24,
+                           description="Frames in the page's turntable; 0 for none")
     elevations: List[float] = Field(default_factory=lambda: [270.0, 0.0, 90.0, 180.0])
     disciplines: Optional[List[str]] = Field(
         None, description="Subset of architecture, structure, electrical, "

@@ -14,6 +14,7 @@ from ..engine import project as PJ
 from ..engine import export as EX
 from ..engine import revise as RV
 from ..engine import pdf as PDF
+from ..engine import webpage as WEB
 from ..engine import draw
 from . import images as IMG
 from .config import settings
@@ -133,7 +134,8 @@ def render_sheets(project, out_dir, elevations, disciplines=None):
     for (number, title, scale, path) in register:
         with open(path, "rb") as fh:
             sheets.append({"filename": os.path.basename(path), "number": number,
-                           "title": title, "scale": scale, "data": fh.read()})
+                           "title": title, "scale": scale, "path": path,
+                           "data": fh.read()})
     return sheets
 
 
@@ -218,7 +220,7 @@ def build_all(req, tmp_root):
         prefix = s["number"].split("-")[0]
         artefacts.append({
             "kind": "drawing", "number": s["number"], "title": s["title"],
-            "filename": s["filename"], "data": s["data"],
+            "filename": s["filename"], "data": s["data"], "path": s["path"],
             "content_type": "image/svg+xml", "width": w, "height": h,
             "meta": {"sheet": s["number"], "paper": "A1", "units": "mm",
                      "scale": s["scale"],
@@ -263,6 +265,25 @@ def build_all(req, tmp_root):
                 "meta": {"format": "pdf", "pages": len(pages),
                          "paper": "A1 sheets", "vector": True},
             })
+
+    if getattr(req, "include_page", True):
+        page_views = [{"svg": v["data"].decode("utf-8"), "title": v["title"],
+                       "note": v["meta"].get("label", "")} for v in views]
+        buf = io.BytesIO()
+        WEB.build(project, buf,
+                  sheets=[(a["number"], a["title"], a["meta"].get("scale"),
+                           a["path"]) for a in artefacts if a["kind"] == "drawing"],
+                  views=page_views,
+                  turntable=int(getattr(req, "turntable", 8) or 0))
+        artefacts.append({
+            "kind": "document", "number": None, "title": "Project page",
+            "filename": "%s-project.html" % num_of(project),
+            "data": buf.getvalue(), "content_type": "text/html",
+            "width": 0, "height": 0,
+            "meta": {"format": "html", "self_contained": True,
+                     "sheets": sum(1 for a in artefacts if a["kind"] == "drawing"),
+                     "views": len(page_views)},
+        })
 
     sheet_index = [{"number": a["number"], "title": a["title"],
                     "filename": a["filename"], "paper": "A1",

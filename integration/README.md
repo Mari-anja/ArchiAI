@@ -94,6 +94,22 @@ with no extra server dependency; other formats need Pillow installed.
 still be snapped onto it. Send `straighten: 0` to keep an outline exactly as
 drawn.
 
+## What comes back
+
+Alongside the individual sheets, every generation returns two things you can
+hand to someone as they are:
+
+- **`<number>-drawings.pdf`** — the whole set as one PDF at true paper size,
+  vector, with the text still text. A1 sheets stay A1; renders get a page they
+  fit on. Turn it off with `"include_pdf": false`.
+- **`<number>-project.html`** — one self-contained page with the sheets, the
+  views, a turntable of the model and the key numbers. Nothing is loaded from
+  anywhere else, so it works from a link, an attachment or a memory stick. A
+  link can point at one drawing: `…#drawings/A-102`. Turn it off with
+  `"include_page": false`, or drop the turntable with `"turntable": 0`.
+
+Both appear in `manifest.documents` and as assets of kind `document`.
+
 ## Changing your mind
 
 Every generation's manifest carries a `source` block — the input that made it,

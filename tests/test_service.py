@@ -1034,13 +1034,13 @@ def test_the_service_returns_the_whole_set_as_one_pdf():
     assert r.status_code == 200, r.text
     body = r.json()
     docs = [a for a in body["assets"] if a["kind"] == "document"]
-    assert len(docs) == 1
-    doc = docs[0]
+    doc = next(a for a in docs if a["meta"].get("format") == "pdf")
     assert doc["content_type"] == "application/pdf"
     assert doc["meta"]["vector"] is True
     drawings = sum(1 for a in body["assets"] if a["kind"] == "drawing")
     assert doc["meta"]["pages"] == drawings + 1          # sheets plus the view
-    assert body["manifest"]["documents"][0]["pages"] == doc["meta"]["pages"]
+    listed = {d["format"]: d for d in body["manifest"]["documents"]}
+    assert listed["pdf"]["pages"] == doc["meta"]["pages"]
 
     from archiai.service.config import settings
     with open(os.path.join(settings.local_root, doc["key"]), "rb") as fh:
@@ -1048,5 +1048,100 @@ def test_the_service_returns_the_whole_set_as_one_pdf():
 
     off = client.post("/v1/generate", json={
         "brief": "a 2 storey office of 1200 m2", "disciplines": ["architecture"],
-        "include_pdf": False})
+        "include_pdf": False, "include_page": False})
+    assert not [a for a in off.json()["assets"] if a["kind"] == "document"]
+    only_page = client.post("/v1/generate", json={
+        "brief": "a 2 storey office of 1200 m2", "disciplines": ["architecture"],
+        "include_pdf": False, "turntable": 0})
+    formats = {a["meta"].get("format") for a in only_page.json()["assets"]
+               if a["kind"] == "document"}
+    assert formats == {"html"}
+
+
+# --- handing it to someone: the page ----------------------------------------
+
+def test_the_project_page_holds_everything_and_needs_nothing():
+    """One file, no network. That is the whole point of it."""
+    from archiai.engine import webpage as W
+    from archiai.engine import view as V
+    import io as _io
+    b = M.Extrusion(FOOTPRINTS["courtyard"], storeys=3, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="page"), {"number": "T"})
+    with tempfile.TemporaryDirectory() as d:
+        register = p.build(d, disciplines=["architecture"])
+        views = [{"svg": V.render(p, "aerial-ne", width=600, height=380),
+                  "title": "Aerial", "note": "from the north-east"}]
+        buf = _io.BytesIO()
+        W.build(p, buf, sheets=register, views=views, turntable=4)
+        page = buf.getvalue().decode("utf-8")
+
+    assert page.startswith("<!doctype html>") and page.rstrip().endswith("</html>")
+
+    # Nothing is fetched from anywhere. The xmlns on every SVG is a namespace
+    # name that happens to look like a URL and is never resolved, so the test
+    # looks for the things that actually cause a request.
+    fetches = [bad for bad in ('src="http', "src='http", 'href="http',
+                               "href='http", "url(http", "<link ", "<iframe",
+                               "@import", "fetch(", "XMLHttpRequest",
+                               "<script src")
+               if bad in page]
+    assert fetches == [], "page reaches out: %s" % fetches
+
+    import html as _html
+    missing = []
+    for (number, title, _scale, _path) in register:
+        if 'id="svg-%s"' % number not in page:
+            missing.append("body of " + number)
+        if 'data-id="%s"' % number not in page:
+            missing.append("link to " + number)
+        if _html.escape(title) not in page:
+            missing.append("title of " + number)
+    assert missing == [], "not on the page: %s" % missing[:5]
+
+    assert page.count("<svg") >= len(register) + 1 + 4      # sheets, view, frames
+    assert "Aerial" in page and "from the north-east" in page
+    assert "%d" % len(b.levels) in page
+
+
+def test_the_page_addresses_a_single_drawing_by_link():
+    from archiai.engine import webpage as W
+    import io as _io
+    b = M.Extrusion(FOOTPRINTS["slab"], storeys=2, floor_to_floor=3.9)
+    p = PJ.Project(b, L.Brief(name="link"), {"number": "T"})
+    with tempfile.TemporaryDirectory() as d:
+        register = p.build(d, disciplines=["architecture"])
+        buf = _io.BytesIO()
+        W.build(p, buf, sheets=register, turntable=0)
+        page = buf.getvalue().decode("utf-8")
+    assert "open_from_hash" in page and "hashchange" in page
+    assert "#' + current" in page or "'#' + current" in page
+    assert "tab-model" not in page          # no turntable was asked for
+
+
+def test_the_service_returns_the_page_as_a_document():
+    r = client.post("/v1/generate", json={
+        "brief": "a 3 storey office of 3000 m2",
+        "disciplines": ["architecture"],
+        "turntable": 3,
+        "views": [{"name": "aerial-ne", "width": 600, "height": 380}]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    docs = {a["meta"].get("format"): a for a in body["assets"]
+            if a["kind"] == "document"}
+    assert set(docs) == {"pdf", "html"}
+    page = docs["html"]
+    assert page["content_type"] == "text/html"
+    assert page["meta"]["self_contained"] is True
+    assert page["meta"]["views"] == 1
+    drawings = sum(1 for a in body["assets"] if a["kind"] == "drawing")
+    assert page["meta"]["sheets"] == drawings
+
+    from archiai.service.config import settings
+    with open(os.path.join(settings.local_root, page["key"])) as fh:
+        text = fh.read()
+    assert 'src="http' not in text and "<link " not in text
+
+    off = client.post("/v1/generate", json={
+        "brief": "a 2 storey office of 1200 m2", "disciplines": ["architecture"],
+        "include_page": False, "include_pdf": False})
     assert not [a for a in off.json()["assets"] if a["kind"] == "document"]
