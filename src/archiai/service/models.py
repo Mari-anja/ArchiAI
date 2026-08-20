@@ -137,6 +137,36 @@ class ViewRequest(_Inputs):
     idempotency_key: Optional[str] = None
 
 
+class ReviseRequest(BaseModel):
+    """The same building with one thing changed.
+
+    `source` is the `source` block from a previous generation's manifest. The
+    engine rebuilds from it, so nothing had to be kept on the server."""
+    source: Dict[str, Any] = Field(..., description="manifest.source from the "
+                                                    "generation being revised")
+    changes: Dict[str, Any] = Field(..., min_length=1,
+                                    description="storeys, area_m2, "
+                                                "floor_to_floor_m, use, shape, "
+                                                "entrance, name, courtyard, "
+                                                "footprint_scale. Values may be "
+                                                "absolute (8), a step ('+2') or "
+                                                "a proportion ('-10%').")
+    revision: Optional[str] = Field(None, description="Override the revision "
+                                                      "code; otherwise stepped "
+                                                      "on from the source")
+    parent_generation_id: Optional[str] = Field(
+        None, description="The generation being revised, echoed back so the "
+                          "lineage can be stored")
+    project_id: Optional[str] = None
+    number: Optional[str] = None
+    client: Optional[str] = None
+    idempotency_key: Optional[str] = None
+    include_model: bool = True
+    elevations: List[float] = Field(default_factory=lambda: [270.0, 0.0, 90.0, 180.0])
+    disciplines: Optional[List[str]] = None
+    views: Optional[List[ViewSpec]] = Field(None, max_length=12)
+
+
 class GenerateRequest(_Inputs):
     project_id: Optional[str] = Field(None, description="Your projects.id, echoed back")
     number: Optional[str] = Field(None, description="Drawing number prefix")

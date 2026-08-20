@@ -12,6 +12,7 @@ from ..engine import layout as L
 from ..engine import massing as M
 from ..engine import project as PJ
 from ..engine import export as EX
+from ..engine import revise as RV
 from ..engine import draw
 from . import images as IMG
 from .config import settings
@@ -36,7 +37,12 @@ def _guard(storeys, area):
                       "split the scheme or raise ARCHIAI_MAX_AREA_M2")
 
 
-def _from_region(region, opts, info, default_name):
+def _with_source(project, source):
+    project.source = source
+    return project
+
+
+def _from_region(region, opts, info, default_name, traced=False):
     """A traced or drawn outline plus a use becomes a Project."""
     if region.area < 25.0:
         raise Refused("the outline encloses only %.1f m2; give an area or a "
@@ -50,7 +56,11 @@ def _from_region(region, opts, info, default_name):
                   name=getattr(opts, "name", None) or default_name)
     brf.accommodation = B.ACCOMMODATION.get(opts.use, B.ACCOMMODATION["office"])
     info["subtitle"] = brf.name
-    return PJ.Project(massing, brf, info)
+    return _with_source(
+        PJ.Project(massing, brf, info),
+        RV.source_from_footprint(region, opts.storeys, opts.floor_to_floor,
+                                 opts.use, opts.entrance_azimuth, brf.name,
+                                 traced=traced))
 
 
 def assemble(req):
@@ -66,7 +76,8 @@ def assemble(req):
         _guard(spec.storeys, spec.area)
         massing, brf = B.build(spec)
         info["subtitle"] = spec.name
-        return spec, PJ.Project(massing, brf, info)
+        return spec, _with_source(PJ.Project(massing, brf, info),
+                                  RV.source_from_spec(spec, req.brief))
 
     if mode == "spec":
         s = req.spec
@@ -78,7 +89,8 @@ def assemble(req):
         _guard(spec.storeys, spec.area)
         massing, brf = B.build(spec)
         info["subtitle"] = spec.name
-        return spec, PJ.Project(massing, brf, info)
+        return spec, _with_source(PJ.Project(massing, brf, info),
+                                  RV.source_from_spec(spec))
 
     if mode == "image":
         im = req.image
@@ -90,7 +102,8 @@ def assemble(req):
         except ValueError as e:
             raise Refused(str(e))
         return None, _from_region(region, im, info,
-                                  im.name or "Traced from an upload")
+                                  im.name or "Traced from an upload",
+                                  traced=True)
 
     f = req.footprint
     _guard(f.storeys, None)
@@ -101,14 +114,7 @@ def assemble(req):
         raise Refused("footprint encloses only %.1f m2; expected metres, not "
                       "millimetres or screen pixels" % region.area)
     d = B.USE_DEFAULTS.get(f.use, B.USE_DEFAULTS["office"])
-    massing = M.Extrusion(region, storeys=f.storeys,
-                          floor_to_floor=f.floor_to_floor)
-    brf = L.Brief(use=f.use, daylight_depth=d["daylight"], corridor_w=d["corridor"],
-                  room_width=d["room_w"], entrance_azimuth=f.entrance_azimuth,
-                  name=f.name or "Drawn footprint")
-    brf.accommodation = B.ACCOMMODATION.get(f.use, B.ACCOMMODATION["office"])
-    info["subtitle"] = brf.name
-    return None, PJ.Project(massing, brf, info)
+    return None, _from_region(region, f, info, f.name or "Drawn footprint")
 
 
 def render_sheets(project, out_dir, elevations, disciplines=None):
@@ -165,10 +171,38 @@ DISCIPLINE = {"A": "architectural", "S": "structural", "E": "electrical",
               "M": "mechanical", "P": "public_health", "FS": "fire"}
 
 
+def assemble_revision(req):
+    """A previous source plus a change, as a Project ready to draw."""
+    try:
+        new_source, notes = RV.apply(req.source, req.changes)
+    except RV.Rejected as e:
+        raise Refused(str(e))
+    if req.revision:
+        new_source["revision"] = req.revision
+    try:
+        spec, massing, brf = RV.build(new_source)
+    except RV.Rejected as e:
+        raise Refused(str(e))
+    _guard(len(massing.levels), massing.gia())
+
+    info = {"number": req.number or "AAI-%s" % uuid.uuid4().hex[:6].upper(),
+            "rev": new_source.get("revision", "P02")}
+    if req.client:
+        info["client"] = req.client
+    info["subtitle"] = (new_source.get("spec") or
+                        new_source.get("footprint") or {}).get("name") or ""
+    project = _with_source(PJ.Project(massing, brf, info), new_source)
+    return spec, project, notes
+
+
 def build_all(req, tmp_root):
     """Full synchronous generation. Returns (spec, project, artefacts, timing)."""
     t0 = time.time()
-    spec, project = assemble(req)
+    notes = None
+    if getattr(req, "source", None) is not None:
+        spec, project, notes = assemble_revision(req)
+    else:
+        spec, project = assemble(req)
     gen_id = uuid.uuid4().hex
     out_dir = os.path.join(tmp_root, gen_id)
     sheets = render_sheets(project, out_dir, req.elevations, req.disciplines)
@@ -211,10 +245,20 @@ def build_all(req, tmp_root):
                     "scale": a["meta"].get("scale"),
                     "discipline": a["meta"].get("discipline")}
                    for a in artefacts if a["kind"] == "drawing"]
+    if getattr(project, "source", None):
+        RV.record_result(project.source, project)
     man = EX.manifest(project, sheet_index, spec, model)
     if views:
         man["views"] = [{"number": v["number"], "title": v["title"],
                          "filename": v["filename"], **v["meta"]} for v in views]
+    if notes is not None:
+        man["revision"] = {
+            "of": (req.source or {}).get("revision", "P01"),
+            "now": project.source.get("revision", "P02"),
+            "parent": getattr(req, "parent_generation_id", None),
+            "changed": notes,
+            "measured": RV.compare((req.source or {}).get("result"), project),
+        }
     artefacts.append({
         "kind": "manifest", "filename": "manifest.json",
         "data": json.dumps(man, indent=2).encode("utf-8"),

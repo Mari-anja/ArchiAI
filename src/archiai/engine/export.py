@@ -124,6 +124,10 @@ def manifest(project, sheets, spec=None, model=None):
             "cost_units": cost_units(project, sheets),
         },
     }
+    source = getattr(project, "source", None)
+    if source:
+        out["source"] = source
+        out["project"]["revision"] = source.get("revision", "P01")
     if spec is not None:
         out["spec"] = {
             "use": spec.use, "shape": spec.shape, "storeys": spec.storeys,

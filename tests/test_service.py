@@ -730,3 +730,168 @@ def test_generate_can_include_views_with_the_drawings():
     assert kinds.count("view") == 2 and kinds.count("drawing") > 5
     assert len(body["manifest"]["views"]) == 2
     assert body["manifest"]["views"][0]["projection"] == "perspective"
+
+
+# --- changing your mind -----------------------------------------------------
+
+def _generate(**body):
+    body.setdefault("disciplines", ["architecture"])
+    r = client.post("/v1/generate", json=body)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _revise(source, changes, **extra):
+    body = {"source": source, "changes": changes,
+            "disciplines": ["architecture"]}
+    body.update(extra)
+    return client.post("/v1/revise", json=body)
+
+
+def test_every_generation_records_what_made_it():
+    """A project you cannot rebuild is a project you cannot revise."""
+    from archiai.engine import revise as RV
+    text = _generate(brief="a 4 storey office of 5000 m2 with a courtyard")
+    src = text["manifest"]["source"]
+    assert src["kind"] == "spec" and src["revision"] == "P01"
+    assert src["spec"]["storeys"] == 4 and src["brief_text"]
+    assert src["result"]["gia_m2"] == text["manifest"]["project"]["gia_m2"]
+
+    drawn = _generate(footprint={"outer": [[0, 0], [60, 0], [60, 30], [0, 30]],
+                                 "storeys": 2})
+    d = drawn["manifest"]["source"]
+    assert d["kind"] == "footprint" and len(d["footprint"]["outer"]) == 4
+    assert d["traced"] is False
+
+    png = _sketch([[(70, 80), (480, 80), (480, 340), (70, 340)]], seed=9)
+    import base64
+    up = _generate(image={"data": base64.b64encode(png).decode(),
+                          "area_m2": 1800, "storeys": 3})
+    u = up["manifest"]["source"]
+    assert u["kind"] == "footprint" and u["traced"] is True
+
+    # and the recorded source rebuilds the same building
+    for m in (text, drawn, up):
+        _spec, massing, _brf = RV.build(m["manifest"]["source"])
+        assert abs(massing.gia() - m["manifest"]["project"]["gia_m2"]) < 1.0
+
+
+def test_adding_storeys_makes_it_taller_not_thinner():
+    """The obvious reading of 'two more storeys' is the one that happens."""
+    base = _generate(brief="a 6 storey office of 12000 m2")
+    src = base["manifest"]["source"]
+    r = _revise(src, {"storeys": "+2"})
+    assert r.status_code == 200, r.text
+    after = r.json()["manifest"]["project"]
+    before = base["manifest"]["project"]
+    assert after["storeys"] == before["storeys"] + 2
+    assert abs(after["footprint_m2"] - before["footprint_m2"]) < 30.0
+    assert after["gia_m2"] > before["gia_m2"] * 1.25
+    # unless the total area is set in the same breath, which wins
+    r2 = _revise(src, {"storeys": "+2", "area_m2": 12000})
+    kept = r2.json()["manifest"]["project"]
+    assert abs(kept["gia_m2"] - before["gia_m2"]) < before["gia_m2"] * 0.05
+    assert kept["footprint_m2"] < before["footprint_m2"] * 0.85
+
+
+def test_a_revision_says_what_changed_and_measures_it():
+    base = _generate(brief="a 5 storey office of 9000 m2 with a courtyard")
+    r = _revise(base["manifest"]["source"],
+                {"entrance": "north", "name": "Northgate"})
+    assert r.status_code == 200, r.text
+    man = r.json()["manifest"]
+    assert man["project"]["revision"] == "P02"
+    assert man["revision"]["of"] == "P01"
+    assert any("north" in n.lower() for n in man["revision"]["changed"])
+    assert any("Northgate" in n for n in man["revision"]["changed"])
+    d = man["revision"]["measured"]
+    assert d["before"]["gia_m2"] == base["manifest"]["project"]["gia_m2"]
+    assert abs(d["delta"]["gia_m2"]) < 1.0          # turning it does not resize it
+    assert man["project"]["name"] == "NORTHGATE"
+
+
+def test_revisions_chain_and_step_their_number():
+    src = _generate(brief="a 4 storey office of 6000 m2 with a courtyard"
+                    )["manifest"]["source"]
+    seen = ["P01"]
+    for changes in ({"storeys": 5}, {"courtyard": "bigger"},
+                    {"entrance": "east"}, {"floor_to_floor_m": "+0.3"}):
+        r = _revise(src, changes)
+        assert r.status_code == 200, "%s: %s" % (changes, r.text)
+        man = r.json()["manifest"]
+        src = man["source"]
+        seen.append(man["project"]["revision"])
+        assert src["result"]["gia_m2"] == man["project"]["gia_m2"]
+    assert seen == ["P01", "P02", "P03", "P04", "P05"]
+
+
+def test_editing_geometry_promotes_a_specified_shape_to_an_outline():
+    """A shape family cannot say 'courtyard 30 percent bigger'; an outline can."""
+    base = _generate(brief="a 4 storey office of 6000 m2 with a courtyard")
+    src = base["manifest"]["source"]
+    assert src["kind"] == "spec"
+    r = _revise(src, {"courtyard": "+30%"})
+    assert r.status_code == 200, r.text
+    man = r.json()["manifest"]
+    assert man["source"]["kind"] == "footprint"
+    assert man["source"]["promoted_from"] == "courtyard"
+    assert any("outline" in n for n in man["revision"]["changed"])
+    assert man["project"]["gia_m2"] < base["manifest"]["project"]["gia_m2"]
+    # and the courtyard really did grow
+    hole_before = 0.0
+    hole_after = sum(abs(G.signed_area([tuple(p) for p in h]))
+                     for h in man["source"]["footprint"]["holes"])
+    assert hole_after > 0
+    # removing it entirely gives the floor area back
+    gone = _revise(man["source"], {"courtyard": "none"})
+    assert gone.status_code == 200
+    assert not gone.json()["manifest"]["source"]["footprint"]["holes"]
+    assert gone.json()["manifest"]["project"]["gia_m2"] > man["project"]["gia_m2"]
+
+
+def test_changes_that_cannot_be_made_are_refused_in_plain_words():
+    src = _generate(brief="a 3 storey office of 3000 m2")["manifest"]["source"]
+    cases = [
+        ({"storeys": 0}, "least"),
+        ({"colour": "blue"}, "cannot change colour"),
+        ({"storeys": 3}, "already"),
+        ({}, None),
+        ({"area_m2": "lots"}, "could not read"),
+        ({"courtyard": "bigger"}, "courtyard"),      # this one has none
+    ]
+    for changes, needle in cases:
+        r = _revise(src, changes)
+        assert r.status_code == 422, "%s was accepted" % changes
+        if needle:
+            assert needle in r.json()["detail"], \
+                "%s said %r" % (changes, r.json()["detail"])
+
+
+def test_a_courtyard_cannot_eat_the_building():
+    """A change that would leave no building around the courtyard is refused."""
+    src = _generate(brief="a 3 storey office of 4000 m2 with a courtyard"
+                    )["manifest"]["source"]
+    grown = _revise(src, {"courtyard": "+20%"})
+    assert grown.status_code == 200
+    r = _revise(grown.json()["manifest"]["source"], {"courtyard": "+900%"})
+    assert r.status_code == 422
+    assert "building around it" in r.json()["detail"]
+
+
+def test_a_revision_is_a_full_project_with_its_pictures():
+    src = _generate(brief="a 3 storey school of 3500 m2")["manifest"]["source"]
+    r = _revise(src, {"storeys": 4},
+                parent_generation_id="gen-under-test",
+                views=[{"name": "aerial-ne", "width": 640, "height": 400}])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    kinds = [a["kind"] for a in body["assets"]]
+    assert kinds.count("drawing") > 5 and kinds.count("view") == 1
+    assert kinds.count("model") == 2 and kinds.count("manifest") == 1
+    assert body["manifest"]["revision"]["parent"] == "gen-under-test"
+    # the drawings carry the new revision in their titleblock
+    from archiai.service.config import settings
+    sheet = next(a for a in body["assets"] if a["kind"] == "drawing")
+    with open(os.path.join(settings.local_root, sheet["key"])) as fh:
+        svg = fh.read()
+    assert "P02" in svg and "P01" not in svg

@@ -24,7 +24,7 @@ from .config import settings
 from .storage import make_storage
 from .models import (GenerateRequest, GenerateResponse, ParseRequest,
                      ParseResponse, TraceRequest, TraceResponse, ViewRequest,
-                     Asset)
+                     ReviseRequest, Asset)
 from . import generate as gen
 from . import images as IMG
 
@@ -150,6 +150,32 @@ async def generate(req: GenerateRequest, _=Depends(require_key)):
     prefix = "%s/%s" % (req.project_id or "anonymous", gen_id)
     assets = await _publish(storage, prefix, artefacts)
 
+    body = GenerateResponse(
+        generation_id=gen_id, project_id=req.project_id, duration_ms=ms,
+        cost_units=man["totals"]["cost_units"], manifest=man, assets=assets)
+    if req.idempotency_key:
+        _remember(req.idempotency_key, body)
+    return body
+
+
+@app.post("/v1/revise", response_model=GenerateResponse)
+async def revise(req: ReviseRequest, _=Depends(require_key)):
+    """The same building with one thing changed, as the next revision.
+
+    Send the `source` block from a previous generation's manifest and what you
+    want different. You get a full set back, numbered P02, with a plain note
+    of what changed and the measured difference it made."""
+    if req.idempotency_key and req.idempotency_key in _idempotent:
+        _idempotent.move_to_end(req.idempotency_key)
+        return _idempotent[req.idempotency_key]
+    try:
+        spec, project, artefacts, man, gen_id, ms = await run_in_threadpool(
+            gen.build_all, req, TMP_ROOT)
+    except gen.Refused as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    prefix = "%s/%s" % (req.project_id or "anonymous", gen_id)
+    assets = await _publish(make_storage(), prefix, artefacts)
     body = GenerateResponse(
         generation_id=gen_id, project_id=req.project_id, duration_ms=ms,
         cost_units=man["totals"]["cost_units"], manifest=man, assets=assets)

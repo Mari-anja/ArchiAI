@@ -47,6 +47,7 @@ need one when they land; the response is already job-shaped (`status`,
 | `POST /v1/parse` | read a brief, return the spec and every assumption. Free — call it as the user types |
 | `POST /v1/trace` | trace an uploaded sketch and return the outline, without building anything |
 | `POST /v1/generate` | generate, upload, return the manifest and asset list |
+| `POST /v1/revise` | the same building with one thing changed, as the next revision |
 | `POST /v1/view` | renders of a building, on their own |
 | `GET /docs` | live OpenAPI browser |
 
@@ -92,6 +93,56 @@ with no extra server dependency; other formats need Pillow installed.
 `straighten` (default `22`, degrees) how far an edge can be off square and
 still be snapped onto it. Send `straighten: 0` to keep an outline exactly as
 drawn.
+
+## Changing your mind
+
+Every generation's manifest carries a `source` block — the input that made it,
+normalised. Keep it next to the generation. To revise, send it back with what
+you want different:
+
+```jsonc
+{ "source": { /* manifest.source from the generation you are revising */ },
+  "changes": { "storeys": "+2", "courtyard": "bigger" },
+  "parent_generation_id": "<the generation you are revising>",
+  "project_id": "<uuid>", "idempotency_key": "<uuid>" }
+```
+
+You get a full set back, numbered `P02`, and a note of what moved:
+
+```json
+{ "revision": {
+    "of": "P01", "now": "P02", "parent": "<generation id>",
+    "changed": ["Storeys 6 to 8.",
+                "Floor plate held, so total floor area 11 000 to 14 667 m²."],
+    "measured": { "before": { "gia_m2": 10956.1, "rooms": 144 },
+                  "after":  { "gia_m2": 14608.1, "rooms": 192 },
+                  "delta":  { "gia_m2": 3652.0, "gia_m2_pct": 33.3, "rooms": 48 } } } }
+```
+
+Show `changed` to the user — it is written to be read aloud. `measured` is the
+difference the engine actually produced, not what the change promised.
+
+**What can change:** `storeys` `area_m2` `floor_to_floor_m` `use` `shape`
+`entrance` `name` `courtyard` `footprint_scale`.
+
+**How to say it:** an absolute value (`8`), a step (`"+2"`, `"-1"`), a
+proportion (`"+20%"`, `"-10%"`), a compass point for `entrance`
+(`"north"`), or a plain word for sizes (`"bigger"`, `"much smaller"`,
+`"none"` to remove a courtyard).
+
+Two behaviours worth knowing:
+
+- **Adding storeys makes the building taller, not thinner.** The floor plate
+  is held and the total area follows. Send `area_m2` in the same call to hold
+  the total instead.
+- **Editing geometry promotes the source.** A shape family cannot express
+  "courtyard 30% bigger", so the first such change converts the source from a
+  specification to the outline it produced, and says so. From then on the
+  building is an outline and `shape` no longer applies.
+
+A change that cannot be made comes back as `422` with a sentence saying why —
+a courtyard that would leave less than 7 m of building around it, a value
+already set, an unknown field.
 
 ## Views
 
