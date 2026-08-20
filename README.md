@@ -24,21 +24,24 @@ engine that now generates projects like it from a brief, a drawn outline or a
 photograph of a sketch. To try the engine, either open a page and click, or
 run one command.
 
-**A page you can click.** Needs the four packages in `requirements.txt`.
+**A page you can click.**
 
 ```sh
-pip install -r requirements.txt
-PYTHONPATH=src python3 -m archiai.service
+python3 run.py
 ```
 
-Open <http://localhost:8080>. Describe a building, draw one with the mouse, or
-upload a picture of a sketch; press Generate; look through the drawings, open
-the PDF, and press the buttons that change your mind about it.
+That opens <http://localhost:8080> in your browser. The page needs four
+packages; if they are missing it offers to put them in a `.venv` inside this
+folder — nothing else on your computer is touched — and then starts. Describe
+a building, draw one with the mouse, or upload a picture of a sketch; press
+Generate; look through the drawings, open the PDF, and press the buttons that
+change your mind about it.
 
-**One command, no server.** Standard library only — nothing to install.
+**One command, no server, nothing installed.** The engine is standard library
+Python, so this works straight after cloning.
 
 ```sh
-PYTHONPATH=src python3 -m archiai "a 6 storey office of 11000 m2 with a courtyard"
+python3 run.py "a 6 storey office of 11000 m2 with a courtyard"
 ```
 
 ```
@@ -58,9 +61,9 @@ Done in 3.5 s. Open the page in a browser to look through it.
 It also takes a sketch or an outline:
 
 ```sh
-python3 -m archiai --image sketch.png --area 2000 --storeys 4
-python3 -m archiai --footprint plot.json --storeys 3      # {"outer": [[x,y],...]}
-python3 -m archiai --help
+python3 run.py --image sketch.png --area 2000 --storeys 4
+python3 run.py --footprint plot.json --storeys 3     # {"outer": [[x,y],...]}
+python3 run.py --help
 ```
 
 ---

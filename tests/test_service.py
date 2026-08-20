@@ -1393,3 +1393,40 @@ def test_the_command_line_says_what_is_wrong_rather_than_traceback(capsys):
             with pytest.raises(SystemExit) as e:
                 cli.main(argv + ["--out", d])
             assert e.value.code != 0
+
+
+def test_one_command_runs_either_the_page_or_the_engine():
+    """`run.py` is the whole setup story, so it has to route correctly."""
+    import importlib.util
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    spec = importlib.util.spec_from_file_location(
+        "archiai_run", os.path.join(root, "run.py"))
+    run = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run)
+
+    # arguments mean the engine, and the engine needs nothing installed
+    with tempfile.TemporaryDirectory() as d:
+        assert run.main(["a 2 storey office of 1200 m2", "--out", d,
+                         "--only", "architecture", "--views", "0",
+                         "--turntable", "0", "--no-pdf", "--no-page"]) == 0
+        assert os.path.isdir(os.path.join(d, "bar-office", "drawings"))
+
+    # no arguments means the page, which is only reached once the packages are
+    # there; with them missing it must offer to set them up rather than fail
+    calls = []
+    run.setup_and_restart = lambda: calls.append("setup") or 0
+    real_have = run.have
+    run.have = lambda mods: False
+    try:
+        assert run.main([]) == 0 and calls == ["setup"]
+    finally:
+        run.have = real_have
+
+    served = []
+    run.serve = lambda port, open_browser=True: served.append((port, open_browser)) or 0
+    run.have = lambda mods: True
+    try:
+        assert run.main(["--no-browser", "--port=9111"]) == 0
+        assert served == [(9111, False)]
+    finally:
+        run.have = real_have
