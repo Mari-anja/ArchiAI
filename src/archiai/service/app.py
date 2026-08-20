@@ -76,6 +76,22 @@ async def _publish(storage, prefix, artefacts):
         raise HTTPException(status_code=502, detail="storage: %s" % e)
 
 
+ASSETS = os.path.join(os.path.dirname(__file__), "assets")
+
+
+@app.get("/", include_in_schema=False)
+def playground():
+    """A page for trying the engine by hand before wiring it into anything."""
+    return FileResponse(os.path.join(ASSETS, "playground.html"),
+                        media_type="text/html")
+
+
+@app.get("/playground.js", include_in_schema=False)
+def playground_js():
+    return FileResponse(os.path.join(ASSETS, "playground.js"),
+                        media_type="application/javascript")
+
+
 @app.get("/v1/health")
 def health():
     return {"status": "ok", "engine": EX.ENGINE_VERSION, **settings.describe()}

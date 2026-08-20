@@ -17,6 +17,54 @@ Floor plate depth    14 400        Storeys                   2
 
 ---
 
+## Try it
+
+The repository is two things: the TORUS project described below, and the
+engine that now generates projects like it from a brief, a drawn outline or a
+photograph of a sketch. To try the engine, either open a page and click, or
+run one command.
+
+**A page you can click.** Needs the four packages in `requirements.txt`.
+
+```sh
+pip install -r requirements.txt
+PYTHONPATH=src python3 -m archiai.service
+```
+
+Open <http://localhost:8080>. Describe a building, draw one with the mouse, or
+upload a picture of a sketch; press Generate; look through the drawings, open
+the PDF, and press the buttons that change your mind about it.
+
+**One command, no server.** Standard library only — nothing to install.
+
+```sh
+PYTHONPATH=src python3 -m archiai "a 6 storey office of 11000 m2 with a courtyard"
+```
+
+```
+Assumed:
+  Entrance orientation not stated; assumed from the south.
+23 sheets
+2 views
+
+COURTYARD OFFICE — 6 storeys, 10 956 m2, 24.5 m tall
+  PDF   output/courtyard-office/AAI-0001-drawings.pdf  0.7 MB (25 pages)
+  Page  output/courtyard-office/AAI-0001-project.html  5.2 MB
+  Sheets in output/courtyard-office/drawings
+
+Done in 3.5 s. Open the page in a browser to look through it.
+```
+
+It also takes a sketch or an outline:
+
+```sh
+python3 -m archiai --image sketch.png --area 2000 --storeys 4
+python3 -m archiai --footprint plot.json --storeys 3      # {"outer": [[x,y],...]}
+python3 -m archiai --help
+```
+
+---
+
 ## The idea in one paragraph
 
 The building really is a torus, not a ring in plan: a circle of radius
@@ -172,14 +220,21 @@ docker run -p 8080:8080 --env-file deploy/env.example archiai-engine
 
 | | |
 |---|---|
+| `GET /` | a page for trying it by hand |
 | `GET /v1/health` | liveness, engine version, storage mode |
 | `POST /v1/parse` | read a brief, return the spec **and every assumption made** |
+| `POST /v1/trace` | trace an uploaded sketch, return the outline it read |
 | `POST /v1/generate` | generate, upload, return manifest and asset list |
+| `POST /v1/revise` | the same building with one thing changed, as the next revision |
+| `POST /v1/view` | renders of a building, on their own |
+| `POST /v1/photoreal` | control images and a description for a photoreal pass |
 
 `/v1/generate` takes exactly one of `brief`, `footprint` (a drawn outline in
-metres) or `spec`. Files go to local disk or Supabase Storage behind one
-interface. See [integration/README.md](integration/README.md) for the SQL
-migration, the TypeScript client and the token-metering flow.
+metres), `spec`, or `image` (a photograph or scan of a sketch). Every
+generation returns the whole set as one PDF and one self-contained project
+page as well as the individual sheets. Files go to local disk or Supabase
+Storage behind one interface. See [integration/README.md](integration/README.md)
+for the SQL migration, the TypeScript client and the token-metering flow.
 
 ## Rebuilding
 

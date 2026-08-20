@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ArchiAI — try the engine</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%231f6feb'/%3E%3Cpath d='M3 12V5h4v7M9 12V5h4v3H9' stroke='%23fff' fill='none' stroke-width='1.4'/%3E%3C/svg%3E">
+<style>
+:root{--ink:#15181c;--grey:#6b7178;--line:#dfe1e4;--bg:#f6f6f4;--card:#fff;
+      --blue:#1f6feb;--good:#1a7f45;--bad:#b3261e}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+header{background:var(--card);border-bottom:1px solid var(--line);padding:16px 22px}
+h1{margin:0;font-size:18px;letter-spacing:.3px}
+header p{margin:3px 0 0;color:var(--grey);font-size:13px}
+main{display:grid;grid-template-columns:400px 1fr;gap:18px;padding:18px 22px 60px;
+  align-items:start}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+.card h2{margin:0 0 10px;font-size:11px;letter-spacing:1.1px;text-transform:uppercase;
+  color:var(--grey)}
+.tabs{display:flex;gap:4px;margin-bottom:12px}
+.tabs button{flex:1;border:1px solid var(--line);background:#fafaf9;padding:8px;
+  border-radius:7px;font:inherit;cursor:pointer;color:var(--grey)}
+.tabs button[aria-selected=true]{background:#eaf1fd;border-color:var(--blue);
+  color:var(--ink);font-weight:600}
+textarea,input,select{width:100%;font:inherit;padding:8px 10px;border:1px solid var(--line);
+  border-radius:7px;background:#fff;color:var(--ink)}
+textarea{min-height:72px;resize:vertical}
+label{display:block;font-size:11px;letter-spacing:.7px;text-transform:uppercase;
+  color:var(--grey);margin:11px 0 4px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chips button{border:1px solid var(--line);background:#fafaf9;border-radius:20px;
+  padding:5px 11px;font:inherit;font-size:12px;cursor:pointer;color:var(--grey)}
+.chips button:hover{border-color:var(--blue);color:var(--ink)}
+.go{width:100%;margin-top:16px;padding:11px;border:0;border-radius:8px;
+  background:var(--blue);color:#fff;font:inherit;font-weight:600;cursor:pointer}
+.go:disabled{background:#9db8e8;cursor:default}
+canvas{width:100%;height:230px;border:1px dashed var(--line);border-radius:8px;
+  background:#fcfcfb;display:block;cursor:crosshair;touch-action:none}
+.hint{color:var(--grey);font-size:12px;margin-top:6px}
+.note{font-size:12px;color:var(--grey);background:#fafaf9;border:1px solid var(--line);
+  border-radius:7px;padding:8px 10px;margin-top:10px}
+.note b{color:var(--ink)}
+.err{color:var(--bad);border-color:#f0c8c4;background:#fdf3f2}
+#out{min-height:70vh}
+.blank{color:var(--grey);text-align:center;padding:70px 20px}
+.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:9px;
+  margin-bottom:14px}
+.stat{border:1px solid var(--line);border-radius:8px;padding:9px 11px;background:#fafaf9}
+.stat span{display:block;font-size:10px;letter-spacing:.8px;text-transform:uppercase;
+  color:var(--grey)}
+.stat b{font-size:17px;font-weight:600}
+.acts{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.acts a{display:inline-block;padding:8px 13px;border-radius:7px;text-decoration:none;
+  border:1px solid var(--line);background:#fafaf9;color:var(--ink);font-size:13px}
+.acts a.primary{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600}
+.gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+.gal a{border:1px solid var(--line);border-radius:8px;overflow:hidden;display:block;
+  background:#eef2f5}
+.gal img{width:100%;display:block}
+.gal small{display:block;padding:6px 9px;background:#fff;border-top:1px solid var(--line);
+  color:var(--grey)}
+.edit{margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+.edit .chips button{border-color:#cfe0ff;color:var(--ink)}
+ul.changes{margin:8px 0 0;padding-left:18px;color:var(--good)}
+.sheets{margin-top:14px;max-height:230px;overflow:auto;border:1px solid var(--line);
+  border-radius:8px}
+.sheets div{padding:5px 11px;border-bottom:1px solid #f0f0ee;font-size:12.5px;
+  display:flex;gap:9px}
+.sheets div span{color:var(--grey);font-variant-numeric:tabular-nums;min-width:56px}
+.spin{display:inline-block;width:13px;height:13px;border:2px solid #fff;
+  border-top-color:transparent;border-radius:50%;animation:s .7s linear infinite;
+  vertical-align:-2px;margin-right:7px}
+@keyframes s{to{transform:rotate(360deg)}}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+</style></head><body>
+<header>
+  <h1>ArchiAI building engine</h1>
+  <p>Running on your machine. Describe a building, draw one, or upload a sketch —
+     then look at what comes out.</p>
+</header>
+<main>
+  <div class="card">
+    <h2>What are you building?</h2>
+    <div class="tabs">
+      <button data-mode="brief" aria-selected="true" onclick="mode('brief')">Describe</button>
+      <button data-mode="draw" aria-selected="false" onclick="mode('draw')">Draw</button>
+      <button data-mode="image" aria-selected="false" onclick="mode('image')">Upload</button>
+    </div>
+
+    <section id="m-brief">
+      <textarea id="brief" placeholder="a 6 storey office of 11000 m2 with a courtyard, entrance from the south"></textarea>
+      <div class="chips">
+        <button onclick="ex(this)">a 6 storey office of 11000 m2 with a courtyard</button>
+        <button onclick="ex(this)">a 3 storey school of 4000 m2 around a courtyard</button>
+        <button onclick="ex(this)">a 12 storey office tower of 24000 m2</button>
+        <button onclick="ex(this)">a single storey gallery of 900 m2</button>
+      </div>
+      <div class="note" id="parsed">Type a brief and it will tell you what it understood.</div>
+    </section>
+
+    <section id="m-draw" hidden>
+      <canvas id="pad" width="740" height="430"></canvas>
+      <div class="hint">Click to place corners. Click the first corner again to close it.
+        Draw a second shape inside for a courtyard.</div>
+      <div class="chips">
+        <button onclick="padUndo()">Undo point</button>
+        <button onclick="padClose()">Close shape</button>
+        <button onclick="padClear()">Start again</button>
+      </div>
+      <label>How wide is it, end to end? (metres)</label>
+      <input id="width_m" type="number" value="70" min="5" max="500">
+    </section>
+
+    <section id="m-image" hidden>
+      <input id="file" type="file" accept="image/png,image/jpeg,image/webp">
+      <div class="hint">A photo or scan of a sketch. PNG always works.</div>
+      <canvas id="traced" width="740" height="430"></canvas>
+      <div class="note" id="trace-note">Choose a picture and it will show you the outline it read.</div>
+      <label>Floor area of one storey (m²)</label>
+      <input id="area_m2" type="number" value="2000" min="40" max="50000">
+    </section>
+
+    <div class="row">
+      <div><label>Storeys</label><input id="storeys" type="number" value="4" min="1" max="40"></div>
+      <div><label>Use</label>
+        <select id="use">
+          <option>office</option><option>school</option><option>gallery</option>
+          <option>apartments</option><option>hotel</option><option>warehouse</option>
+        </select></div>
+    </div>
+    <div class="row">
+      <div><label>Entrance faces</label>
+        <select id="entrance">
+          <option value="270">south</option><option value="90">north</option>
+          <option value="0">east</option><option value="180">west</option>
+        </select></div>
+      <div><label>Drawings</label>
+        <select id="disciplines">
+          <option value="architecture">Architecture only (fast)</option>
+          <option value="">Every discipline</option>
+        </select></div>
+    </div>
+    <button class="go" id="go" onclick="generate()">Generate the project</button>
+    <div class="note" id="status" hidden></div>
+  </div>
+
+  <div class="card" id="out"><div class="blank">Nothing generated yet.</div></div>
+</main>
+<script src="/playground.js"></script>
+</body></html>

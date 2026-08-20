@@ -1316,3 +1316,80 @@ def test_a_configured_image_service_is_used_when_there_is_one(monkeypatch):
         assert not [a for a in body["assets"] if a["kind"] == "recipe"]
     finally:
         PR._BACKENDS.pop("fake", None)
+
+
+# --- trying it by hand ------------------------------------------------------
+
+def test_the_test_page_is_served_and_calls_the_routes_it_needs():
+    r = client.get("/")
+    assert r.status_code == 200 and "text/html" in r.headers["content-type"]
+    page = r.text
+    for bit in ("Describe", "Draw", "Upload", "Generate the project",
+                "playground.js"):
+        assert bit in page, "%r missing from the page" % bit
+
+    j = client.get("/playground.js")
+    assert j.status_code == 200
+    code = j.text
+    for route in ("/v1/parse", "/v1/trace", "/v1/generate", "/v1/revise"):
+        assert route in code, "the page never calls %s" % route
+    assert "Change your mind" in code       # the edit loop is offered
+    for change in ('"storeys":"+1"', '"courtyard":"bigger"', '"entrance":"north"'):
+        assert change in code, "%s is not offered" % change
+    # it only talks to itself
+    assert "http://" not in code and "https://" not in code
+
+
+def test_the_command_line_builds_a_project_from_words():
+    from archiai import __main__ as cli
+    with tempfile.TemporaryDirectory() as d:
+        code = cli.main(["a 4 storey office of 5000 m2 with a courtyard",
+                         "--out", d, "--only", "architecture", "--views", "1",
+                         "--turntable", "0", "--number", "CLI-1"])
+        assert code == 0
+        folder = os.path.join(d, "courtyard-office")
+        assert os.path.isdir(os.path.join(folder, "drawings"))
+        assert len(os.listdir(os.path.join(folder, "drawings"))) > 5
+        pdf = os.path.join(folder, "CLI-1-drawings.pdf")
+        page = os.path.join(folder, "CLI-1-project.html")
+        assert os.path.getsize(pdf) > 20000
+        assert os.path.getsize(page) > 20000
+        with open(pdf, "rb") as fh:
+            _pdf_check(fh.read())
+
+
+def test_the_command_line_takes_a_sketch_and_an_outline():
+    from archiai import __main__ as cli
+    with tempfile.TemporaryDirectory() as d:
+        png = os.path.join(d, "sketch.png")
+        with open(png, "wb") as fh:
+            fh.write(_sketch([[(60, 60), (500, 60), (500, 360), (60, 360)]]))
+        assert cli.main(["--image", png, "--area", "1500", "--storeys", "3",
+                         "--out", d, "--only", "architecture", "--views", "0",
+                         "--turntable", "0", "--no-page"]) == 0
+        assert os.path.isdir(os.path.join(d, "sketch", "drawings"))
+
+        shape = os.path.join(d, "plot.json")
+        with open(shape, "w") as fh:
+            json.dump({"outer": [[0, 0], [60, 0], [60, 30], [0, 30]],
+                       "holes": []}, fh)
+        assert cli.main(["--footprint", shape, "--storeys", "2", "--out", d,
+                         "--only", "architecture", "--views", "0",
+                         "--turntable", "0", "--no-pdf",
+                         "--name", "Plot"]) == 0
+        assert os.path.isfile(os.path.join(d, "plot", "AAI-0001-project.html"))
+
+
+def test_the_command_line_says_what_is_wrong_rather_than_traceback(capsys):
+    from archiai import __main__ as cli
+    with tempfile.TemporaryDirectory() as d:
+        # a missing file is a message and a non-zero exit, not a stack trace
+        code = cli.main(["--image", os.path.join(d, "nope.png"), "--area",
+                         "800", "--out", d])
+        assert code == 2
+        assert "Could not build that" in capsys.readouterr().err
+        # and the arguments that cannot work are refused up front
+        for argv in ([], ["--image", "x.png"]):
+            with pytest.raises(SystemExit) as e:
+                cli.main(argv + ["--out", d])
+            assert e.value.code != 0
