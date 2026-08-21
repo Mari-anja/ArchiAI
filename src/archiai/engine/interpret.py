@@ -160,11 +160,16 @@ SCHEMA = {
         },
         "unreadable": {
             "type": "array", "items": {"type": "string"},
-            "description": "Things the brief asks for that this vocabulary "
-                           "cannot express, each in a few words -- a twisting "
-                           "tower, a cantilever, a specific site. Say them "
-                           "plainly so the person is told what was dropped "
-                           "rather than left to notice.",
+            "description": "Physical things the brief asks for that this "
+                           "vocabulary cannot express, each named as a thing "
+                           "in a few words -- 'a twisting tower', 'bridges "
+                           "across the void', 'planting inside the atrium'. "
+                           "They are read back to the person as a list of "
+                           "what is missing, so write each one so it fits "
+                           "after the words 'it cannot build'. Do not list "
+                           "information the brief simply did not give, such "
+                           "as a missing use or a missing area -- those are "
+                           "reported separately.",
         },
     },
     "required": ["use", "use_is_a_stretch", "asked_for", "storeys", "area_m2",
@@ -307,6 +312,10 @@ def read(text, model=None, timeout=60.0):
 
 
 # ---------------------------------------------------------------------------
+def _an(word):
+    return ("an " if word[:1].lower() in "aeiou" else "a ") + word
+
+
 def to_spec(data, text=""):
     """A reading, checked against what the engine can honestly build.
 
@@ -369,19 +378,29 @@ def to_spec(data, text=""):
         spec.floor_to_floor = B.USE_DEFAULTS[use]["f2f"]
 
     # Everything the person should be told, in the order they would want it.
-    if data.get("use_is_a_stretch") and data.get("asked_for"):
-        spec.assume("A %s is not a use it plans; laid out as a %s, so the "
-                    "drawings are real but the room mix is not."
-                    % (str(data["asked_for"]).strip(), use))
+    if data.get("use_is_a_stretch"):
+        asked = str(data.get("asked_for") or "").strip()
+        if asked:
+            spec.assume("%s is not a use it plans; laid out as %s, so the "
+                        "drawings are real but the room mix is not."
+                        % (_an(asked).capitalize(), _an(use)))
+        else:
+            spec.assume("The brief does not say what the building is for; "
+                        "laid out as %s." % _an(use))
     if area is None:
         spec.assume("No floor area given; sized from the storey count.")
     if not data.get("entrance_stated", True):
-        spec.assume("Entrance orientation not stated; assumed from the south.")
-    for missed in (data.get("unreadable") or [])[:6]:
-        m = str(missed).strip()
-        if m:
-            spec.assume("It cannot build %s yet, so that part of the brief "
-                        "is not in these drawings." % (m[0].lower() + m[1:]))
+        facing = {v: k for k, v in B.COMPASS.items() if len(k) > 2}
+        spec.assume("Entrance orientation not stated; put to the %s."
+                    % facing.get(entrance, "%g degrees" % entrance))
+    missed = [str(m).strip() for m in (data.get("unreadable") or []) if str(m).strip()]
+    if missed:
+        # One sentence listing them, rather than one sentence each starting
+        # "It cannot build", which reads badly the moment an entry is a
+        # phrase rather than a thing.
+        items = [m[0].lower() + m[1:] for m in missed[:6]]
+        spec.assume("Not in these drawings, because it cannot build them yet: "
+                    + "; ".join(items) + ".")
     return spec
 
 

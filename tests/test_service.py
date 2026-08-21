@@ -1751,6 +1751,25 @@ def test_what_the_brief_asked_for_and_did_not_get_is_said_out_loud():
     said = " ".join(IN.to_spec(stretch, BRIEF).assumptions)
     assert "chapel" in said and "office" in said
 
+    # the sentences have to read like sentences
+    assert "as a office" not in said and "as an gallery" not in said
+    # a use it could not name at all is not reported as an unbuildable thing
+    unnamed = dict(READING, use_is_a_stretch=True, asked_for="")
+    said = " ".join(IN.to_spec(unnamed, BRIEF).assumptions)
+    assert "does not say what the building is for" in said
+    assert "cannot build" not in said.split("Not in these drawings")[0]
+    # what is missing is listed once, not once per line
+    many = dict(READING, unreadable=["bridges across the void",
+                                     "planting in the atrium", "a water feature"])
+    said = [a for a in IN.to_spec(many, BRIEF).assumptions
+            if "cannot build" in a]
+    assert len(said) == 1 and said[0].count(";") == 2
+    # and the direction named is the direction used
+    north = dict(READING, entrance="north", entrance_stated=False)
+    spec = IN.to_spec(north, BRIEF)
+    assert spec.entrance == 90.0
+    assert "to the north" in " ".join(spec.assumptions)
+
 
 def test_the_reader_cannot_ask_for_what_the_engine_cannot_build():
     """Everything the model says is clamped; it never gets the last word."""
