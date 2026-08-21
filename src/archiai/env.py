@@ -12,6 +12,12 @@ import os
 
 NAME = ".env"
 
+# Which settings came out of the file, and which the file was not allowed to
+# set because something had already exported them. An export that shadows the
+# file is the one way this can go quietly wrong.
+FROM_FILE = set()
+SHADOWED = set()
+
 
 def find(start=None):
     """The .env beside run.py, whatever directory the engine was started in."""
@@ -32,6 +38,7 @@ def load(path=None):
     if not path:
         return []
     done = []
+    FROM_FILE.discard("ANTHROPIC_API_KEY")
     try:
         text = open(path, encoding="utf-8", errors="replace").read()
     except OSError:
@@ -49,8 +56,24 @@ def load(path=None):
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
-        if not key or key in os.environ:        # a real export still wins
+        if not key:
+            continue
+        if key in os.environ:                   # a real export still wins
+            if os.environ[key] != value:
+                SHADOWED.add(key)
             continue
         os.environ[key] = value
+        FROM_FILE.add(key)
         done.append(key)
     return done
+
+
+def source(key):
+    """Where a setting came from, in words a person can act on."""
+    if key not in os.environ:
+        return None
+    if key in SHADOWED:
+        return "an exported variable, which is overriding the .env file"
+    if key in FROM_FILE:
+        return "the .env file"
+    return "an exported variable"

@@ -214,12 +214,21 @@ building and nothing more."""
 # which is far too late to decide whether to offer prose reading at all. This
 # is the same resolution order the SDK documents, checked without a call.
 def credentials():
-    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        from .. import env as _env
+        return _env.source("ANTHROPIC_API_KEY") or "environment"
+    if os.environ.get("ANTHROPIC_AUTH_TOKEN"):
         return "environment"
     home = os.path.expanduser("~/.config/anthropic")
     if os.path.isdir(home) and any(f.endswith(".json") for f in os.listdir(home)):
         return "profile"
     return None
+
+
+def shadowed():
+    """True when an exported key is overriding the one in the file."""
+    from .. import env as _env
+    return "ANTHROPIC_API_KEY" in _env.SHADOWED
 
 
 def fingerprint():

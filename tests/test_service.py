@@ -1893,7 +1893,7 @@ def test_a_key_can_live_in_the_project_instead_of_a_terminal():
             assert os.environ["ARCHIAI_TEST_ONLY"] == "quoted"
 
             from archiai.engine import interpret as IN
-            assert IN.credentials() == "environment"
+            assert IN.credentials() == "the .env file"
 
             # a real export outranks the file, and is never overwritten
             os.environ["ANTHROPIC_API_KEY"] = "sk-ant-exported"
@@ -2166,3 +2166,47 @@ def test_a_port_someone_else_is_sitting_on_is_stepped_over():
     n = free.getsockname()[1]
     free.close()
     assert run.free_port(n) == n
+
+
+def test_an_exported_key_that_hides_the_file_says_so():
+    """The one way a working .env can still be wrong, made visible."""
+    from archiai import env as ENV
+    from archiai.engine import interpret as IN
+    keep = dict(os.environ)
+    keep_file, keep_shadow = set(ENV.FROM_FILE), set(ENV.SHADOWED)
+    try:
+        ENV.FROM_FILE.clear()
+        ENV.SHADOWED.clear()
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, ".env")
+            open(p, "w").write("ANTHROPIC_API_KEY=sk-ant-from-the-file\n")
+
+            ENV.load(p)                             # nothing exported
+            assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-from-the-file"
+            assert IN.credentials() == "the .env file"
+            assert IN.shadowed() is False
+
+            # now a stale export arrives and wins, which is the trap
+            ENV.FROM_FILE.clear()
+            ENV.SHADOWED.clear()
+            os.environ["ANTHROPIC_API_KEY"] = "sk-ant-stale-export"
+            ENV.load(p)
+            assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-stale-export"
+            assert IN.shadowed() is True
+            assert "overriding the .env file" in IN.credentials()
+
+            # an export that matches the file is not a conflict
+            ENV.SHADOWED.clear()
+            os.environ["ANTHROPIC_API_KEY"] = "sk-ant-from-the-file"
+            ENV.load(p)
+            assert IN.shadowed() is False
+    finally:
+        os.environ.clear()
+        os.environ.update(keep)
+        ENV.FROM_FILE.clear(); ENV.FROM_FILE.update(keep_file)
+        ENV.SHADOWED.clear(); ENV.SHADOWED.update(keep_shadow)
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    body = open(os.path.join(root, "run.py")).read()
+    assert "unset ANTHROPIC_API_KEY" in body      # and the fix is named

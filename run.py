@@ -95,10 +95,13 @@ def check(brief):
         sys.stdout.flush()
     say("\n  Brief:\n    %s\n" % brief)
     where = IN.credentials()
-    say("  Key: %s" % (("found in the " + where) if where
+    say("  Key: %s" % (("found in " + where) if where
                        else "NOT FOUND -- put ANTHROPIC_API_KEY in .env"))
     if not where:
         return 2
+    if IN.shadowed():
+        say("     ! an exported ANTHROPIC_API_KEY is overriding the .env file;\n"
+            "       if it is an old one, run  unset ANTHROPIC_API_KEY")
     fp = IN.fingerprint()
     if fp:
         say("  Looks like: %s  (%d characters)" % (fp["shown"], fp["length"]))
@@ -157,7 +160,11 @@ def serve(port, open_browser=True):
     url = "http://127.0.0.1:%d" % port
     print("\n  The engine is running.")
     if IN.available():
-        print("  Briefs will be read as prose.")
+        print("  Briefs will be read as prose, using the key from %s."
+              % IN.credentials())
+        if IN.shadowed():
+            print("  WARNING: that export is hiding the key in .env. If it is\n"
+                  "  an old one, run  unset ANTHROPIC_API_KEY  and start again.")
     else:
         print("  No Anthropic key found, so briefs are read by keyword only.")
         print("  To fix it, once and for good:")
