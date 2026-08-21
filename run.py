@@ -128,9 +128,32 @@ def check(brief):
     return 0
 
 
+def free_port(port, tries=12):
+    """The port asked for, or the next one nobody is sitting on.
+
+    An engine left running in a terminal that has since been closed is the
+    normal case, not an error worth stopping for."""
+    import socket
+    for i in range(tries):
+        s = socket.socket()
+        try:
+            s.bind(("127.0.0.1", port + i))
+            return port + i
+        except OSError:
+            continue
+        finally:
+            s.close()
+    return port
+
+
 def serve(port, open_browser=True):
     import uvicorn
     from archiai.engine import interpret as IN
+    asked, port = port, free_port(port)
+    if port != asked:
+        print("\n  Something is already using port %d -- probably an engine "
+              "still\n  running in another terminal. Using %d instead."
+              % (asked, port))
     url = "http://127.0.0.1:%d" % port
     print("\n  The engine is running.")
     if IN.available():

@@ -2142,3 +2142,27 @@ def test_the_reader_schema_is_one_the_api_will_accept():
     assert 0 <= spec.void_growth_m <= 6
     assert 3.0 <= spec.columns["spacing_m"] <= 24.0
     assert 80 <= spec.columns["diameter_mm"] <= 2000
+
+
+def test_a_port_someone_else_is_sitting_on_is_stepped_over():
+    """An engine left running in a closed terminal is normal, not fatal."""
+    import importlib.util, socket
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    spec = importlib.util.spec_from_file_location(
+        "archiai_run_port", os.path.join(root, "run.py"))
+    run = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run)
+
+    held = socket.socket()
+    held.bind(("127.0.0.1", 0))
+    taken = held.getsockname()[1]
+    try:
+        assert run.free_port(taken) == taken + 1
+    finally:
+        held.close()
+
+    free = socket.socket()
+    free.bind(("127.0.0.1", 0))
+    n = free.getsockname()[1]
+    free.close()
+    assert run.free_port(n) == n
