@@ -2065,3 +2065,61 @@ def test_a_rejected_key_can_be_diagnosed_without_printing_it():
         os.environ.pop("ANTHROPIC_API_KEY", None)
         if keep:
             os.environ["ANTHROPIC_API_KEY"] = keep
+
+
+def test_the_reader_schema_is_one_the_api_will_accept():
+    """A schema the API rejects is a reader that never runs at all.
+
+    Structured output takes a subset of JSON Schema. The rejection only
+    arrives as a 400 from a real call, so the shape is checked here instead."""
+    from archiai.engine import interpret as IN
+
+    BANNED = ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
+              "minLength", "maxLength", "minItems", "maxItems", "pattern",
+              "format", "default", "$ref", "allOf", "oneOf", "not")
+
+    def walk(node, path="schema"):
+        out = []
+        if isinstance(node, dict):
+            for k in BANNED:
+                if k in node:
+                    out.append("%s.%s" % (path, k))
+            for k, v in node.items():
+                out += walk(v, "%s.%s" % (path, k))
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                out += walk(v, "%s[%d]" % (path, i))
+        return out
+
+    assert walk(IN.SCHEMA) == []
+
+    # every object must be closed and list every one of its properties, or
+    # the API rejects it
+    def objects(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                yield node
+            for v in node.values():
+                yield from objects(v)
+        elif isinstance(node, list):
+            for v in node:
+                yield from objects(v)
+
+    for obj in objects(IN.SCHEMA):
+        assert obj.get("additionalProperties") is False
+        assert set(obj["properties"]) == set(obj["required"])
+
+    # and it survives the round trip the API does to it
+    import json
+    assert json.loads(json.dumps(IN.SCHEMA)) == IN.SCHEMA
+
+    # the ranges the schema can no longer state are still enforced, here
+    wild = {"storeys": 9999, "cores_to_ground": 99, "lift_m": 900,
+            "setback_m": 999, "void_growth_m": 99, "shape": "courtyard",
+            "columns": {"spacing_m": 0.1, "diameter_mm": 99999}}
+    spec = IN.to_spec(wild, "a 3 storey office of 2000 m2")
+    assert 1 <= spec.storeys <= 60 and 0 <= spec.cores_to_ground <= 6
+    assert 0 <= spec.lift_m <= 30 and 0 <= spec.setback <= 12
+    assert 0 <= spec.void_growth_m <= 6
+    assert 3.0 <= spec.columns["spacing_m"] <= 24.0
+    assert 80 <= spec.columns["diameter_mm"] <= 2000

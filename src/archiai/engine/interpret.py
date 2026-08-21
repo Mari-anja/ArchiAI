@@ -32,6 +32,11 @@ MODEL = os.environ.get("ARCHIAI_BRIEF_MODEL", "claude-opus-5")
 # What the reader is allowed to say. Every field here is one the massing
 # honours; there is deliberately nothing in this schema the engine would
 # quietly ignore.
+#
+# Structured output does not accept minimum/maximum, so the ranges live in
+# the descriptions. Nothing is trusted from them anyway -- `to_spec` clamps
+# every value against what the engine can build, which is where a limit
+# belongs when the thing on the other end is a model.
 SCHEMA = {
     "type": "object",
     "properties": {
@@ -51,11 +56,15 @@ SCHEMA = {
             "description": "The building type in the brief's own words, or an "
                            "empty string when the brief does not name one.",
         },
-        "storeys": {"type": "integer", "minimum": 1, "maximum": 60},
+        "storeys": {
+            "type": "integer",
+            "description": "Storeys above ground, 1 to 60.",
+        },
         "area_m2": {
-            "type": ["number", "null"], "minimum": 60,
-            "description": "Total floor area over all storeys. Null when the "
-                           "brief gives no size -- do not invent one.",
+            "type": ["number", "null"],
+            "description": "Total floor area over all storeys, at least 60. "
+                           "Null when the brief gives no size -- do not "
+                           "invent one.",
         },
         "shape": {
             "type": "string", "enum": sorted(set(B.SHAPES.values())),
@@ -69,25 +78,33 @@ SCHEMA = {
                      "north-east", "north-west", "south-east", "south-west"],
         },
         "entrance_stated": {"type": "boolean"},
-        "floor_to_floor_m": {"type": ["number", "null"], "minimum": 2.4,
-                             "maximum": 12.0},
+        "floor_to_floor_m": {
+            "type": ["number", "null"],
+            "description": "Floor to floor height, 2.4 to 12 metres. Null to "
+                           "let the use decide.",
+        },
         "lift_m": {
-            "type": "number", "minimum": 0, "maximum": 30,
+            "type": "number",
             "description": "Height the building is held above the ground on "
                            "columns, leaving the ground plane open beneath it "
                            "-- piloti, 'hovering', 'floating', 'raised above "
-                           "the landscape'. 0 when the building sits on the "
-                           "ground, which is the normal case.",
+                           "the landscape'. 0 to 30 metres, and 0 when the "
+                           "building sits on the ground, which is the normal "
+                           "case.",
         },
         "columns": {
             "type": "object",
             "properties": {
-                "spacing_m": {"type": "number", "minimum": 3, "maximum": 24},
+                "spacing_m": {
+                    "type": "number",
+                    "description": "Centres between columns, 3 to 24 metres.",
+                },
                 "diameter_mm": {
-                    "type": "number", "minimum": 80, "maximum": 2000,
-                    "description": "150-250 for columns described as very "
-                                   "thin or slender, 400-600 for ordinary "
-                                   "ones, 800+ for heavy or monumental.",
+                    "type": "number",
+                    "description": "80 to 2000. Use 150-250 for columns "
+                                   "described as very thin or slender, "
+                                   "400-600 for ordinary ones, 800+ for "
+                                   "heavy or monumental.",
                 },
                 "shape": {"type": "string", "enum": ["round", "square"]},
                 "material": {"type": "string",
@@ -98,10 +115,11 @@ SCHEMA = {
             "additionalProperties": False,
         },
         "cores_to_ground": {
-            "type": "integer", "minimum": 0, "maximum": 6,
+            "type": "integer",
             "description": "Solid cores that come down to the earth through "
-                           "an open ground plane. Only when the brief says "
-                           "something like 'only the cores touch the ground'.",
+                           "an open ground plane, 0 to 6. Only when the brief "
+                           "says something like 'only the cores touch the "
+                           "ground'.",
         },
         "ground": {
             "type": "string", "enum": ["paved", "planted", "open", "water"],
@@ -114,18 +132,19 @@ SCHEMA = {
                      "metal", "brick"],
         },
         "setback_m": {
-            "type": "number", "minimum": 0, "maximum": 12,
-            "description": "How far the upper floors step in. 0 for a "
-                           "straight-sided mass.",
+            "type": "number",
+            "description": "How far the upper floors step in, 0 to 12 metres. "
+                           "0 for a straight-sided mass.",
         },
         "void_growth_m": {
-            "type": "number", "minimum": 0, "maximum": 6,
+            "type": "number",
             "description": "How much wider the courtyard or atrium opens on "
-                           "each storey going up, leaving the outside "
-                           "unchanged. Use it when the brief describes an "
-                           "inside that gets lighter or more open as it "
-                           "rises while the exterior stays monolithic. 0 for "
-                           "a void of constant size. Needs shape 'courtyard'.",
+                           "each storey going up, 0 to 6 metres, leaving the "
+                           "outside unchanged. Use it when the brief "
+                           "describes an inside that gets lighter or more "
+                           "open as it rises while the exterior stays "
+                           "monolithic. 0 for a void of constant size. Needs "
+                           "shape 'courtyard'.",
         },
         "name": {
             "type": "string",
