@@ -9,7 +9,9 @@ them in a .venv inside this folder and start again, so nothing is installed
 anywhere else on the machine. The second form needs nothing at all -- the
 engine itself is standard library Python.
 
-Set ANTHROPIC_API_KEY to have briefs read as prose rather than by keyword.
+Put ANTHROPIC_API_KEY in a file called .env beside this one to have briefs
+read as prose rather than by keyword. An exported variable works too, but
+only in the terminal it was typed in.
 """
 
 import os
@@ -77,8 +79,16 @@ def setup_and_restart():
 
 def serve(port, open_browser=True):
     import uvicorn
+    from archiai.engine import interpret as IN
     url = "http://127.0.0.1:%d" % port
     print("\n  The engine is running.")
+    if IN.available():
+        print("  Briefs will be read as prose.")
+    else:
+        print("  No Anthropic key found, so briefs are read by keyword only.")
+        print("  To fix it, once and for good:")
+        print("      echo 'ANTHROPIC_API_KEY=sk-ant-...' > %s"
+              % os.path.join(HERE, ".env"))
     print("  Open %s in your browser." % url)
     print("  Press Control-C here to stop it.\n")
     if open_browser:
@@ -98,6 +108,8 @@ def serve(port, open_browser=True):
 
 def main(argv):
     sys.path.insert(0, SRC)
+    from archiai import env as ENV
+    ENV.load()
     args = [a for a in argv if not a.startswith("--")]
     flags = {a for a in argv if a.startswith("--")}
     port = 8080

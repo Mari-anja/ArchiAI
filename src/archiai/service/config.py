@@ -2,6 +2,10 @@
 
 import os
 
+from .. import env as _env
+
+_env.load()
+
 
 def _bool(name, default=False):
     v = os.environ.get(name)

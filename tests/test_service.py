@@ -1852,3 +1852,40 @@ def test_the_page_cannot_be_served_from_a_stale_cache():
     assert "/v1/health" in code and "reads_prose" in code
     assert "read by keyword only" in code
     assert 'id="build"' in client.get("/").text
+
+
+def test_a_key_can_live_in_the_project_instead_of_a_terminal():
+    """An export dies with the window it was typed in; a setting should not."""
+    from archiai import env as ENV
+    keep = dict(os.environ)
+    try:
+        for k in ("ANTHROPIC_API_KEY", "ARCHIAI_TEST_ONLY"):
+            os.environ.pop(k, None)
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, ".env")
+            open(p, "w").write(
+                "# comments and blank lines are skipped\n\n"
+                "ANTHROPIC_API_KEY=sk-ant-fromfile\n"
+                "export ARCHIAI_TEST_ONLY='quoted'\n"
+                "a line with no equals sign\n")
+            assert set(ENV.load(p)) == {"ANTHROPIC_API_KEY", "ARCHIAI_TEST_ONLY"}
+            assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-fromfile"
+            assert os.environ["ARCHIAI_TEST_ONLY"] == "quoted"
+
+            from archiai.engine import interpret as IN
+            assert IN.credentials() == "environment"
+
+            # a real export outranks the file, and is never overwritten
+            os.environ["ANTHROPIC_API_KEY"] = "sk-ant-exported"
+            assert ENV.load(p) == []
+            assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-exported"
+
+        # a missing file is silence, not an error
+        assert ENV.load(os.path.join(d, "gone")) == []
+    finally:
+        os.environ.clear()
+        os.environ.update(keep)
+
+    # and a real key must never be committable
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    assert ".env" in open(os.path.join(root, ".gitignore")).read()
