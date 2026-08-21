@@ -131,13 +131,13 @@ class Spec:
     # engine cannot build, because a vocabulary that promises more than the
     # thing behind it is worse than a small one.
     MOVES = ("lift_m", "columns", "cores_to_ground", "ground", "facade",
-             "courtyard_fraction", "setback")
+             "courtyard_fraction", "setback", "void_growth_m")
 
     def __init__(self, use="office", storeys=3, area=None, shape="bar",
                  entrance=270.0, name=None, floor_to_floor=None,
                  lift_m=0.0, columns=None, cores_to_ground=0, ground=None,
                  facade=None, courtyard_fraction=None, setback=None,
-                 intent=None):
+                 void_growth_m=0.0, intent=None):
         use = (use or "office").strip().lower()
         if use not in USE_DEFAULTS:
             raise ValueError(
@@ -159,6 +159,7 @@ class Spec:
         self.facade = facade                    # mirror / glass / concrete ...
         self.courtyard_fraction = courtyard_fraction
         self.setback = setback                  # metres stepped in up the mass
+        self.void_growth_m = max(0.0, float(void_growth_m or 0.0))
         self.intent = intent                    # the sentence it was read from
         self.assumptions = []
 
@@ -325,7 +326,8 @@ def build(spec):
         return M.Extrusion(foot, storeys=spec.storeys,
                            floor_to_floor=spec.floor_to_floor,
                            setbacks=setbacks, lift=spec.lift_m,
-                           columns=cols, cores=cores)
+                           columns=cols, cores=cores,
+                           void_growth=spec.void_growth_m)
 
     massing = make(s)
     if spec.area:
@@ -337,7 +339,9 @@ def build(spec):
             massing = make(s)
     brief = L.Brief(use=spec.use, daylight_depth=d["daylight"],
                     corridor_w=d["corridor"], room_width=d["room_w"],
-                    entrance_azimuth=spec.entrance, name=spec.name)
+                    entrance_azimuth=spec.entrance, name=spec.name,
+                    facade=spec.facade or "glass",
+                    ground=spec.ground or "paving")
     brief.accommodation = ACCOMMODATION[spec.use]
     brief.internal = INTERNAL[spec.use]
     return massing, brief

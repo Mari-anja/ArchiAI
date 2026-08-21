@@ -80,7 +80,7 @@ class Brief:
     def __init__(self, use="office", daylight_depth=7.5, corridor_w=2.4,
                  room_width=7.2, core_spacing=62.0, core_w=9.0, core_depth=None,
                  wall_t=0.35, entrance_azimuth=270.0, name="Untitled",
-                 desk_area=8.0):
+                 desk_area=8.0, facade="glass", ground="paving"):
         self.use = use
         self.daylight_depth = daylight_depth
         self.corridor_w = corridor_w
@@ -92,6 +92,11 @@ class Brief:
         self.entrance_azimuth = entrance_azimuth
         self.name = name
         self.desk_area = desk_area
+        # What the outside is made of, and what it stands on. The elevations
+        # and the views both read these; a facade nobody honours is a field
+        # that lies.
+        self.facade = facade
+        self.ground = ground
 
 
 # ---------------------------------------------------------------------------

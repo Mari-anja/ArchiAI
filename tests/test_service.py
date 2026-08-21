@@ -1889,3 +1889,62 @@ def test_a_key_can_live_in_the_project_instead_of_a_terminal():
     # and a real key must never be committable
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     assert ".env" in open(os.path.join(root, ".gitignore")).read()
+
+
+def test_a_void_can_open_as_it_rises_without_ever_snapping_shut():
+    """Dense below, light above: the inside changes, the outside does not."""
+    from archiai.engine import massing as M
+    foot = G.Region(G.rectangle(66, 50), [G.rectangle(20, 14)])
+    m = M.Extrusion(foot, storeys=9, floor_to_floor=4.2, void_growth=2.1)
+
+    voids = [abs(G.signed_area(lv.plate.holes[0])) if lv.plate.holes else 0.0
+             for lv in m.levels]
+    assert voids[0] < voids[3] < voids[-1]          # it opens going up
+    assert all(b >= a - 1.0 for a, b in zip(voids, voids[1:]))  # never shuts
+    # the outside is untouched, which is what makes it monolithic
+    assert all(abs(G.area(lv.plate.outer) - G.area(foot.outer)) < 1.0
+               for lv in m.levels)
+    # and it stops rather than eating the building
+    assert all(lv.plate.area > foot.area * 0.15 for lv in m.levels)
+
+    plain = M.Extrusion(foot, storeys=9, floor_to_floor=4.2)
+    assert len({round(lv.plate.area) for lv in plain.levels}) == 1
+
+
+def test_the_facade_a_brief_asks_for_is_the_facade_that_gets_drawn():
+    """A field the pictures ignore is a field that lies."""
+    from archiai.engine import view as V, interpret as IN
+    for facade, opaque in (("concrete", True), ("stone", True),
+                           ("glass", False), ("mirror", False)):
+        spec = IN.to_spec({"facade": facade, "storeys": 2, "shape": "bar"},
+                          "a 2 storey office of 1800 m2")
+        assert spec.facade == facade
+        massing, brf = B.build(spec)
+        assert brf.facade == facade
+        p = PJ.Project(massing, brf)
+        mat, band = V._facade(p)
+        assert mat == facade
+        assert (band < 1.0) is opaque, facade
+        assert mat in V.MATERIALS and mat in V.SEGMENT
+        assert len(V.render(p, "entrance", width=600, height=380)) > 8000
+
+    # an unknown facade falls back rather than failing
+    p = PJ.Project(*B.build(B.Spec(use="office", storeys=2, area=1800.0,
+                                   floor_to_floor=3.9, facade="unobtanium")))
+    assert V._facade(p) == V.FACADES["glass"]
+
+
+def test_the_void_can_be_looked_up_from_the_bottom():
+    """A void that widens as it rises is only legible from underneath."""
+    from archiai.engine import view as V, interpret as IN
+    spec = IN.to_spec({"shape": "courtyard", "storeys": 8, "void_growth_m": 2.0,
+                       "facade": "concrete"}, "an 8 storey office of 14000 m2")
+    massing, brf = B.build(spec)
+    p = PJ.Project(massing, brf)
+    cam = V.camera(p, "courtyard", width=800, height=500)
+
+    hole = max(massing.footprint().holes, key=lambda h: abs(G.signed_area(h)))
+    assert G.point_in_ring((cam.eye[0], cam.eye[1]), hole)   # not inside a wall
+    assert cam.eye[2] < 3.0                                  # standing on the ground
+    assert cam.target[2] > massing.height * 0.9              # looking up it
+    assert len(V.render(p, "courtyard", width=700, height=440)) > 8000

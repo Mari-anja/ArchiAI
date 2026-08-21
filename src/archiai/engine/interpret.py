@@ -118,6 +118,15 @@ SCHEMA = {
             "description": "How far the upper floors step in. 0 for a "
                            "straight-sided mass.",
         },
+        "void_growth_m": {
+            "type": "number", "minimum": 0, "maximum": 6,
+            "description": "How much wider the courtyard or atrium opens on "
+                           "each storey going up, leaving the outside "
+                           "unchanged. Use it when the brief describes an "
+                           "inside that gets lighter or more open as it "
+                           "rises while the exterior stays monolithic. 0 for "
+                           "a void of constant size. Needs shape 'courtyard'.",
+        },
         "name": {
             "type": "string",
             "description": "A short project name, two or three words, taken "
@@ -142,7 +151,7 @@ SCHEMA = {
     "required": ["use", "use_is_a_stretch", "asked_for", "storeys", "area_m2",
                  "shape", "entrance", "entrance_stated", "floor_to_floor_m",
                  "lift_m", "columns", "cores_to_ground", "ground", "facade",
-                 "setback_m", "name", "intent", "unreadable"],
+                 "setback_m", "void_growth_m", "name", "intent", "unreadable"],
     "additionalProperties": False,
 }
 
@@ -304,6 +313,8 @@ def to_spec(data, text=""):
         cores_to_ground=int(num("cores_to_ground", 0, 6, 0)) if lift else 0,
         ground=data.get("ground"), facade=data.get("facade"),
         setback=num("setback_m", 0.0, 12.0, 0.0),
+        void_growth_m=(num("void_growth_m", 0.0, 6.0, 0.0)
+                       if shape == "courtyard" else 0.0),
         intent=(str(data.get("intent") or "").strip() or None),
     )
     if f2f is None:

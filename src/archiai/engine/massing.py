@@ -318,6 +318,33 @@ class Massing:
 
 
 # ---------------------------------------------------------------------------
+VOID_BAND_MIN = 9.0     # metres of building that must remain around a void
+
+
+def _open_void(plate, grow, band_min):
+    """`plate` with its holes opened by `grow`, or None if that leaves no room."""
+    if grow <= 0.0:
+        return plate
+    out = []
+    for h in plate.holes:
+        r = G.offset_ring(h, -grow)
+        if len(r) < 3 or G.signed_area(r) >= 0:      # turned itself inside out
+            return None
+        out.append(r)
+    if not out:
+        return None
+    opened = G.Region(plate.outer, out)
+    # what is left has to be wide enough to be a building, not a rim
+    if opened.area < plate.area * 0.16:
+        return None
+    # fits_inside pulls the outer in and pushes the hole out at the same
+    # time, so it closes the band between them by twice the distance given.
+    for r in out:
+        if not G.fits_inside(G.Region(plate.outer, [r]), band_min / 2.0):
+            return None
+    return opened
+
+
 class Support:
     """One thing standing on the ground: a column, or a core coming down."""
     __slots__ = ("kind", "region", "centre", "size", "material")
@@ -393,7 +420,7 @@ class Extrusion(Massing):
 
     def __init__(self, footprint, storeys=2, floor_to_floor=4.2, wall_t=0.35,
                  ground_ffl=0.0, setbacks=None, parapet=1.1, slab_t=0.30,
-                 lift=0.0, columns=None, cores=None):
+                 lift=0.0, columns=None, cores=None, void_growth=0.0):
         self.foot = footprint if isinstance(footprint, G.Region) else G.Region(footprint)
         self.wall_t, self.parapet, self.f2f = wall_t, parapet, floor_to_floor
         # A building can be held above an open ground plane. Everything above
@@ -405,10 +432,21 @@ class Extrusion(Massing):
             self.columns = piloti(self.foot)
         ground_ffl = ground_ffl + self.lift
         setbacks = setbacks or {}
+        # A void that opens out as it rises: the outside stays monolithic
+        # while the inside gets lighter floor by floor, which is a different
+        # move from a setback and reads as one from the ground.
+        self.void_growth = max(0.0, float(void_growth or 0.0))
+        widest = None                  # the most open plate that still works
         levels = []
         for i in range(storeys):
             back = setbacks.get(i, 0.0)
             plate = self.foot.offset(back) if back else self.foot
+            if self.void_growth and plate.holes:
+                # The void grows until there is no building left to give, and
+                # then it stops. It must never snap shut on the floor above.
+                opened = _open_void(plate, self.void_growth * i, VOID_BAND_MIN)
+                plate = opened or widest or plate
+                widest = plate
             levels.append(Level(i, "Level %02d" % i, ground_ffl + i * floor_to_floor,
                                 floor_to_floor, plate, slab_t))
         super().__init__(levels)

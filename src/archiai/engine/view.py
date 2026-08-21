@@ -143,6 +143,14 @@ def sun(latitude=51.5, day=172, hour=14.0):
 # ---------------------------------------------------------------------------
 MATERIALS = {
     "glass":    ((150, 178, 194), 0.55),
+    # Facades a brief can ask for by name. A monolithic building has to come
+    # back looking monolithic, not like a glass box with the word attached.
+    "concrete": ((196, 192, 185), 0.03),
+    "stone":    ((203, 196, 181), 0.04),
+    "brick":    ((166, 122, 104), 0.03),
+    "timber":   ((186, 152, 112), 0.05),
+    "metal":    ((178, 182, 187), 0.28),
+    "mirror":   ((168, 190, 204), 0.72),
     "spandrel": ((176, 180, 184), 0.10),
     "wall":     ((205, 201, 194), 0.06),
     "soffit":   ((168, 165, 159), 0.04),
@@ -179,6 +187,8 @@ PASSES = ("depth", "normal", "segment", "line")
 # map can be read back without ambiguity.
 SEGMENT = {
     "glass": (60, 120, 200), "spandrel": (120, 90, 190), "wall": (200, 90, 60),
+    "concrete": (200, 90, 60), "stone": (210, 110, 70), "brick": (180, 70, 50),
+    "timber": (190, 130, 60), "metal": (140, 140, 160), "mirror": (80, 150, 210),
     "soffit": (150, 60, 40), "roof": (230, 170, 40), "parapet": (200, 140, 30),
     "slab": (240, 220, 120), "ground": (70, 160, 70), "paving": (150, 150, 150),
     "context": (110, 110, 130), "tree": (40, 200, 90), "trunk": (90, 70, 40),
@@ -440,6 +450,18 @@ def _collar(scene, lower, upper, z, n=64):
         scene.face(quad, material, cull=False)
 
 
+# Facades the engine can draw, and how much of a storey is window in each.
+FACADES = {"glass": ("glass", 1.0), "mirror": ("mirror", 1.0),
+           "metal": ("metal", 0.72), "timber": ("timber", 0.55),
+           "brick": ("brick", 0.42), "stone": ("stone", 0.42),
+           "concrete": ("concrete", 0.42)}
+
+
+def _facade(project):
+    want = (getattr(project.brief, "facade", None) or "glass").strip().lower()
+    return FACADES.get(want, FACADES["glass"])
+
+
 def undercroft(scene, project, keep=None):
     """The open ground plane: what holds the building up, and its soffit.
 
@@ -489,6 +511,10 @@ def building(scene, project, cutaway=None):
             _collar(scene, prev.outer, lv.plate.outer, base)
             for k in range(min(len(prev.holes), len(lv.plate.holes))):
                 _collar(scene, prev.holes[k], lv.plate.holes[k], base)
+        # An opaque facade is mostly solid with a strip of window in it; a
+        # glass one is a curtain wall. The brief decides which, so the word
+        # "monolithic" changes the picture rather than decorating it.
+        solid, band = _facade(project)
         for ring, is_hole in _rings(lv.plate):
             pts = G.resample(ring, 3.0)
             n = len(pts)
@@ -497,14 +523,20 @@ def building(scene, project, cutaway=None):
                 mid = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
                 if not keep(mid):
                     continue
-                if z_sill > base + 0.05:
+                lo = z_sill + (z_head - z_sill) * (1.0 - band) / 2.0
+                hi = z_head - (z_head - z_sill) * (1.0 - band) / 2.0
+                if lo > base + 0.05:
                     scene.face([(a[0], a[1], base), (b[0], b[1], base),
-                                (b[0], b[1], z_sill), (a[0], a[1], z_sill)],
-                               "wall" if i == 0 else "spandrel")
-                if z_head > z_sill + 0.05:
-                    scene.face([(a[0], a[1], z_sill), (b[0], b[1], z_sill),
+                                (b[0], b[1], lo), (a[0], a[1], lo)],
+                               solid if solid != "glass"
+                               else ("wall" if i == 0 else "spandrel"))
+                if hi > lo + 0.05:
+                    scene.face([(a[0], a[1], lo), (b[0], b[1], lo),
+                                (b[0], b[1], hi), (a[0], a[1], hi)], "glass")
+                if z_head > hi + 0.05:
+                    scene.face([(a[0], a[1], hi), (b[0], b[1], hi),
                                 (b[0], b[1], z_head), (a[0], a[1], z_head)],
-                               "glass")
+                               solid if solid != "glass" else "spandrel")
         if i and cutaway is not None:
             _slab(scene, project, i, lv, keep)
 
@@ -863,16 +895,23 @@ def camera(project, name="aerial-ne", width=1600, height=1000, fov=48.0,
     if name == "courtyard":
         holes = plate.holes
         if holes:
+            # Stand at the bottom of the void and look up it. A void that
+            # opens as it rises is only legible from underneath, and the eye
+            # has to stay inside the narrowest floor or it ends up in a wall.
             h = max(holes, key=lambda k: abs(G.signed_area(k)))
             hx, hy = G.centroid(h)
             hb = G.Region(h).bbox()
-            back = max(hb[2] - hb[0], hb[3] - hb[1]) * 0.34
+            near = min(hb[2] - hb[0], hb[3] - hb[1])
             a = math.radians(azimuth if azimuth is not None else 225.0)
+            back = near * 0.30
             eye = (hx - math.cos(a) * back, hy - math.sin(a) * back,
                    eye_height or 1.62)
-            return Camera(eye, (hx + math.cos(a) * back, hy + math.sin(a) * back,
-                                m.height * 0.55), fov=fov, width=width,
-                          height=height)
+            if not G.point_in_ring((eye[0], eye[1]), h):
+                eye = (hx, hy, eye_height or 1.62)
+            return Camera(eye, (hx + math.cos(a) * back * 0.5,
+                                hy + math.sin(a) * back * 0.5,
+                                m.height * 1.02),
+                          fov=max(fov, 62.0), width=width, height=height)
         name = "entrance"
 
     def stand_off(az, extra):
