@@ -154,21 +154,28 @@ def main(argv):
             port = int(f.split("=", 1)[1])
             flags.discard(f)
 
-    if "--check" in flags:
-        return check(" ".join(args) or CHECK_BRIEF)
-
-    if args or "--help" in flags or "-h" in flags:
-        from archiai.__main__ import main as cli          # no dependencies
-        return cli(argv)
-
-    if not have(NEEDS):
+    # Anything that needs packages has to be running inside .venv first,
+    # or it reports the packages missing while they sit installed next door.
+    def ready(mods):
+        if have(mods):
+            return None
         if os.path.abspath(sys.executable).startswith(os.path.abspath(VENV)):
             print("The packages are still missing inside .venv. Try:\n"
                   "  %s -m pip install -r requirements.txt" % venv_python(),
                   file=sys.stderr)
             return 1
         return setup_and_restart()
-    return serve(port, "--no-browser" not in flags)
+
+    if "--check" in flags:
+        stop = ready(["anthropic"])
+        return stop if stop is not None else check(" ".join(args) or CHECK_BRIEF)
+
+    if args or "--help" in flags or "-h" in flags:
+        from archiai.__main__ import main as cli          # no dependencies
+        return cli(argv)
+
+    stop = ready(NEEDS)
+    return stop if stop is not None else serve(port, "--no-browser" not in flags)
 
 
 if __name__ == "__main__":
