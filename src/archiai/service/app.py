@@ -80,17 +80,23 @@ async def _publish(storage, prefix, artefacts):
 ASSETS = os.path.join(os.path.dirname(__file__), "assets")
 
 
+# A cached page is worse than no page: it looks like the engine has not
+# changed when only the browser has not noticed. This is a tool you run
+# against a copy you are editing, so it must never be held in a cache.
+FRESH = {"Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"}
+
+
 @app.get("/", include_in_schema=False)
 def playground():
     """A page for trying the engine by hand before wiring it into anything."""
     return FileResponse(os.path.join(ASSETS, "playground.html"),
-                        media_type="text/html")
+                        media_type="text/html", headers=FRESH)
 
 
 @app.get("/playground.js", include_in_schema=False)
 def playground_js():
     return FileResponse(os.path.join(ASSETS, "playground.js"),
-                        media_type="application/javascript")
+                        media_type="application/javascript", headers=FRESH)
 
 
 @app.get("/v1/health")

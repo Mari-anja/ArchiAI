@@ -35,6 +35,11 @@ const USE_WORDS = { residential: "homes / apartments", gallery: "gallery / museu
 async function vocabulary() {
   try {
     VOCAB = await (await fetch("/v1/vocabulary")).json();
+    const h = await (await fetch("/v1/health")).json();
+    $("#build").innerHTML = `engine ${h.engine} · ${VOCAB.uses.length} uses · ` +
+      (VOCAB.reads_prose
+        ? "briefs <b>read as prose</b>"
+        : "briefs <i>read by keyword only</i> — set ANTHROPIC_API_KEY and restart");
   } catch (e) { return; }
   const u = $("#use");
   u.innerHTML = VOCAB.uses.map(

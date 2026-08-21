@@ -1838,3 +1838,17 @@ def test_a_building_you_walk_under_gets_a_drawing_of_what_you_walk_through():
     with tempfile.TemporaryDirectory() as d:
         made = PJ.Project(plain, brf2).build(d, disciplines=["architecture"])
     assert "A-090" not in [n for n, *_ in made]
+
+
+def test_the_page_cannot_be_served_from_a_stale_cache():
+    """A cached page looks exactly like an engine that has not changed."""
+    for path in ("/", "/playground.js"):
+        r = client.get(path)
+        assert r.status_code == 200
+        assert "no-store" in r.headers.get("cache-control", ""), path
+
+    # and the page says which engine answered, and whether it can read prose
+    code = client.get("/playground.js").text
+    assert "/v1/health" in code and "reads_prose" in code
+    assert "read by keyword only" in code
+    assert 'id="build"' in client.get("/").text
