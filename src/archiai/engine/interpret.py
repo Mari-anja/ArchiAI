@@ -198,6 +198,27 @@ def credentials():
     return None
 
 
+def fingerprint():
+    """Enough of the key to spot a bad one, never enough to leak it.
+
+    A rejected key is usually a revoked one, a half-paste, or the example
+    text left in place -- all three are visible from the shape alone."""
+    key = os.environ.get("ANTHROPIC_API_KEY") or ""
+    if not key:
+        return None
+    shown = key[:11] + "..." + key[-4:] if len(key) > 20 else "(very short)"
+    notes = []
+    if not key.startswith("sk-ant-"):
+        notes.append("does not start with sk-ant-")
+    if "your" in key.lower() or "here" in key.lower():
+        notes.append("still looks like the example text")
+    if len(key) < 90:
+        notes.append("looks too short; a full key is around 108 characters")
+    if key.strip() != key or '"' in key or "'" in key:
+        notes.append("has quotes or spaces around it")
+    return {"shown": shown, "length": len(key), "notes": notes}
+
+
 def _client():
     try:
         import anthropic

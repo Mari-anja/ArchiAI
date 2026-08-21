@@ -2038,3 +2038,30 @@ def test_the_reader_can_be_tested_without_a_browser():
     finally:
         if keep:
             os.environ["ANTHROPIC_API_KEY"] = keep
+
+
+def test_a_rejected_key_can_be_diagnosed_without_printing_it():
+    """A bad key is usually revoked, half-pasted, or the example left in."""
+    from archiai.engine import interpret as IN
+    keep = os.environ.get("ANTHROPIC_API_KEY")
+    try:
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        assert IN.fingerprint() is None
+
+        real = "sk-ant-api03-" + "x" * 95
+        os.environ["ANTHROPIC_API_KEY"] = real
+        fp = IN.fingerprint()
+        assert fp["notes"] == [] and fp["length"] == len(real)
+        assert real not in fp["shown"]                  # never the whole key
+        assert fp["shown"].startswith("sk-ant-api") and "..." in fp["shown"]
+
+        for bad, expect in (("sk-ant-your-key-here", "example text"),
+                            ("sk-ant-api03-tooshort", "too short"),
+                            ("nope-" + "y" * 100, "sk-ant-")):
+            os.environ["ANTHROPIC_API_KEY"] = bad
+            notes = " ".join(IN.fingerprint()["notes"])
+            assert expect in notes, (bad, notes)
+    finally:
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        if keep:
+            os.environ["ANTHROPIC_API_KEY"] = keep

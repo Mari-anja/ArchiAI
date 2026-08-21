@@ -95,6 +95,11 @@ def check(brief):
                          else "NOT FOUND -- put ANTHROPIC_API_KEY in .env"))
     if not where:
         return 2
+    fp = IN.fingerprint()
+    if fp:
+        print("  Looks like: %s  (%d characters)" % (fp["shown"], fp["length"]))
+        for n in fp["notes"]:
+            print("     ! it %s" % n)
     print("  Model: %s" % IN.MODEL)
     print("  Calling ...\n")
     try:
@@ -102,6 +107,12 @@ def check(brief):
     except Exception as e:
         print("  IT FAILED, and this is why:\n    %s: %s\n"
               % (type(e).__name__, e), file=sys.stderr)
+        if "authentication" in str(e) or "401" in str(e):
+            print("  That is Anthropic rejecting the key itself, not a bug\n"
+                  "  here. Make a fresh one at console.anthropic.com under\n"
+                  "  API Keys, then put it in .env, all on one line:\n"
+                  "      echo 'ANTHROPIC_API_KEY=sk-ant-...' > %s\n"
+                  % os.path.join(HERE, ".env"), file=sys.stderr)
         return 1
     print(json.dumps(data, indent=2, sort_keys=True))
     spec = IN.to_spec(data, brief)
