@@ -93,8 +93,9 @@ async function parse() {
     if (d.assumptions.length)
       html += `<br><b>Assumed:</b> ${d.assumptions.join(" ")}`;
     if (s.read_by === "keyword")
-      html += `<br><b>Read by keyword only.</b> Set ANTHROPIC_API_KEY and ` +
-              `restart to have it read what you actually wrote.`;
+      html += `<br><b>Read by keyword only.</b> ` + (s.read_note
+        ? `The reader was tried and failed: ${s.read_note}`
+        : `Set ANTHROPIC_API_KEY and restart to have it read what you wrote.`);
     box.innerHTML = html;
     $("#storeys").value = s.storeys;
     if (s.use) $("#use").value = s.use;

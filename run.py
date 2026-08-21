@@ -2,6 +2,7 @@
 """Run the building engine.
 
     python3 run.py                       open the page in a browser
+    python3 run.py --check               test the brief reader, loudly
     python3 run.py "a 6 storey office of 11000 m2 with a courtyard"
 
 The first form needs a few packages; if they are missing this offers to put
@@ -77,6 +78,41 @@ def setup_and_restart():
                            env=env)
 
 
+CHECK_BRIEF = ("A monolithic block cut through by a tall planted void that "
+               "opens out as it rises, dense below and light at the top.")
+
+
+def check(brief):
+    """Make one real call to the brief reader and say exactly what happened.
+
+    A feature that quietly degrades is indistinguishable from a broken one,
+    so there has to be a way to ask it directly."""
+    import json
+    from archiai.engine import interpret as IN
+    print("\n  Brief:\n    %s\n" % brief)
+    where = IN.credentials()
+    print("  Key: %s" % (("found in the " + where) if where
+                         else "NOT FOUND -- put ANTHROPIC_API_KEY in .env"))
+    if not where:
+        return 2
+    print("  Model: %s" % IN.MODEL)
+    print("  Calling ...\n")
+    try:
+        data = IN.read(brief)
+    except Exception as e:
+        print("  IT FAILED, and this is why:\n    %s: %s\n"
+              % (type(e).__name__, e), file=sys.stderr)
+        return 1
+    print(json.dumps(data, indent=2, sort_keys=True))
+    spec = IN.to_spec(data, brief)
+    print("\n  Which becomes: %s -- %d storey %s, %s"
+          % (spec.name, spec.storeys, spec.use, spec.shape))
+    for a in spec.assumptions:
+        print("    * %s" % a)
+    print("\n  The reader works.\n")
+    return 0
+
+
 def serve(port, open_browser=True):
     import uvicorn
     from archiai.engine import interpret as IN
@@ -117,6 +153,9 @@ def main(argv):
         if f.startswith("--port="):
             port = int(f.split("=", 1)[1])
             flags.discard(f)
+
+    if "--check" in flags:
+        return check(" ".join(args) or CHECK_BRIEF)
 
     if args or "--help" in flags or "-h" in flags:
         from archiai.__main__ import main as cli          # no dependencies

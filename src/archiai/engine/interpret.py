@@ -232,7 +232,7 @@ def read(text, model=None, timeout=60.0):
     try:
         r = client.with_options(timeout=timeout).messages.create(
             model=model or MODEL,
-            max_tokens=4000,
+            max_tokens=16000,
             system=SYSTEM,
             thinking={"type": "adaptive"},
             output_config={"effort": "medium",
@@ -250,12 +250,20 @@ def read(text, model=None, timeout=60.0):
         raise NotConfigured("the brief reader is not usable: %s" % e)
     if r.stop_reason == "refusal":
         raise NotConfigured("the brief reader declined to read that")
+    if r.stop_reason == "max_tokens":
+        # Thinking counts against max_tokens, so a budget that looks generous
+        # for a small answer can still be spent before the answer is written.
+        raise NotConfigured("the brief reader ran out of room before it "
+                            "finished (raise max_tokens)")
     body = next((b.text for b in r.content if b.type == "text"), "")
+    if not body.strip():
+        raise NotConfigured("the brief reader answered with nothing "
+                            "(stop reason %s)" % r.stop_reason)
     try:
         return json.loads(body)
     except ValueError:
         raise NotConfigured("the brief reader did not answer in the "
-                            "vocabulary it was asked for")
+                            "vocabulary it was asked for: %.140s" % body)
 
 
 # ---------------------------------------------------------------------------
@@ -340,9 +348,15 @@ def to_spec(data, text=""):
 def parse(text, model=None, timeout=60.0):
     """Read a brief with a model if there is one, by keyword if there is not.
 
-    Returns (spec, how) where how is "model" or "keyword", because a person
-    is owed the difference."""
+    Returns (spec, how, why). `how` is "model" or "keyword", because a person
+    is owed the difference; `why` is the reason it fell back, because a
+    silent degradation is indistinguishable from a broken feature and leaves
+    someone staring at a keyword reading with no idea what to fix."""
     try:
-        return to_spec(read(text, model, timeout), text), "model"
-    except (NotConfigured, ValueError):
-        return B.parse(text), "keyword"
+        return to_spec(read(text, model, timeout), text), "model", None
+    except NotConfigured as e:
+        return B.parse(text), "keyword", str(e)
+    except ValueError as e:
+        return B.parse(text), "keyword", str(e)
+    except Exception as e:                      # never take a request down
+        return B.parse(text), "keyword", "%s: %s" % (type(e).__name__, e)

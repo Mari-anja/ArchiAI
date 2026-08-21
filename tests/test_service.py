@@ -1782,8 +1782,9 @@ def test_the_reader_cannot_ask_for_what_the_engine_cannot_build():
 
 def test_a_brief_is_read_by_keyword_when_there_is_no_model_and_says_so():
     from archiai.engine import interpret as IN
-    spec, how = IN.parse("a 4 storey office of 6000 m2 with a courtyard")
+    spec, how, why = IN.parse("a 4 storey office of 6000 m2 with a courtyard")
     assert how in ("model", "keyword")
+    assert (why is None) == (how == "model")
     assert spec.use == "office" and spec.storeys == 4
 
     # the page is told which happened, so nobody is left wondering
@@ -1948,3 +1949,92 @@ def test_the_void_can_be_looked_up_from_the_bottom():
     assert cam.eye[2] < 3.0                                  # standing on the ground
     assert cam.target[2] > massing.height * 0.9              # looking up it
     assert len(V.render(p, "courtyard", width=700, height=440)) > 8000
+
+
+def test_a_reader_that_fails_says_why_instead_of_going_quiet():
+    """Silent degradation is indistinguishable from a broken feature."""
+    from archiai.engine import interpret as IN
+    import anthropic
+
+    class Blk:
+        def __init__(self, t, text=""):
+            self.type, self.text = t, text
+
+    class Resp:
+        def __init__(self, stop, blocks):
+            self.stop_reason, self.content = stop, blocks
+
+    class Fake:
+        answer = None
+
+        def with_options(self, **kw):
+            return self
+
+        class messages:
+            @staticmethod
+            def create(**kw):
+                return Fake.answer
+
+    real = IN._client
+    IN._client = lambda: Fake()
+    try:
+        cases = {
+            "ran out of room": Resp("max_tokens", [Blk("text", '{"use":')]),
+            "answered with nothing": Resp("end_turn", [Blk("thinking")]),
+            "did not answer in the vocabulary":
+                Resp("end_turn", [Blk("text", "Sure! Here is your building.")]),
+            "declined": Resp("refusal", []),
+        }
+        for expect, resp in cases.items():
+            Fake.answer = resp
+            spec, how, why = IN.parse("a 3 storey office of 2000 m2")
+            assert how == "keyword", expect
+            assert expect in why, (expect, why)
+            assert spec.storeys == 3          # and it still built something
+
+        Fake.answer = Resp("end_turn",
+                           [Blk("text", '{"use":"hotel","storeys":4}')])
+        spec, how, why = IN.parse("a 3 storey office of 2000 m2")
+        assert how == "model" and why is None and spec.use == "hotel"
+
+        # a hard failure must never take the request down with it
+        class Boom:
+            def with_options(self, **kw):
+                return self
+
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    raise anthropic.APIConnectionError(request=None)
+
+        IN._client = lambda: Boom()
+        spec, how, why = IN.parse("a 3 storey office of 2000 m2")
+        assert how == "keyword" and "could not be reached" in why
+    finally:
+        IN._client = real
+
+    # and the reason reaches the page rather than stopping at the service
+    r = client.post("/v1/parse", json={"brief": "a 3 storey office of 2000 m2"})
+    assert "read_note" in r.json()["spec"]
+    assert "read_note" in client.get("/playground.js").text
+
+
+def test_the_reader_can_be_tested_without_a_browser():
+    """One command that makes a real call and says exactly what happened."""
+    import importlib.util
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    spec = importlib.util.spec_from_file_location(
+        "archiai_run_check", os.path.join(root, "run.py"))
+    run = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run)
+    assert hasattr(run, "check") and "--check" in open(
+        os.path.join(root, "run.py")).read()
+
+    keep = os.environ.pop("ANTHROPIC_API_KEY", None)
+    try:
+        from archiai.engine import interpret as IN
+        if IN.credentials() is None:            # no key: it must say so, not crash
+            assert run.check("a 3 storey office") == 2
+    finally:
+        if keep:
+            os.environ["ANTHROPIC_API_KEY"] = keep

@@ -113,10 +113,12 @@ def assemble(req):
 
     if mode == "brief":
         try:
-            spec, how = IN.parse(req.brief)
+            spec, how, why = IN.parse(req.brief)
         except ValueError as e:
             raise Refused(str(e))
         info["read_by"] = how
+        if why:
+            info["read_note"] = why
         _guard(spec.storeys, spec.area, _disc(req))
         massing, brf = B.build(spec)
         info["subtitle"] = spec.name

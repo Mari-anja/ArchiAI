@@ -127,12 +127,12 @@ def vocabulary():
 async def parse(req: ParseRequest, _=Depends(require_key)):
     """Read a brief without generating anything. Free, and safe to call on
     every keystroke so the UI can show what was understood before committing."""
-    spec, how = await run_in_threadpool(IN.parse, req.brief)
+    spec, how, why = await run_in_threadpool(IN.parse, req.brief)
     sheets = gen.estimate_sheets(spec.storeys, req.disciplines)
     out = {"use": spec.use, "shape": spec.shape, "storeys": spec.storeys,
            "area_m2": spec.area, "entrance_azimuth": spec.entrance,
            "floor_to_floor_m": spec.floor_to_floor, "name": spec.name,
-           "read_by": how, "intent": spec.intent}
+           "read_by": how, "read_note": why, "intent": spec.intent}
     for move in B.Spec.MOVES:
         v = getattr(spec, move, None)
         if v:
