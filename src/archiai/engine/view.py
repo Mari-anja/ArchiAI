@@ -515,28 +515,38 @@ def building(scene, project, cutaway=None):
         # glass one is a curtain wall. The brief decides which, so the word
         # "monolithic" changes the picture rather than decorating it.
         solid, band = _facade(project)
-        for ring, is_hole in _rings(lv.plate):
-            pts = G.resample(ring, 3.0)
-            n = len(pts)
+        # The facade runs between the plate at this floor and the plate at the
+        # next, so a plan that turns or grows gets a ruled surface rather than
+        # a vertical extrusion with slots between the floors.
+        span = max(1e-6, nxt - lv.ffl)
+        for (lower, upper, is_hole) in m.wall_strips(i):
+            n = len(lower)
             for k in range(n):
-                a, b = pts[k], pts[(k + 1) % n]
-                mid = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+                a0, b0 = lower[k], lower[(k + 1) % n]
+                a1, b1 = upper[k], upper[(k + 1) % n]
+                mid = ((a0[0] + b0[0]) / 2.0, (a0[1] + b0[1]) / 2.0)
                 if not keep(mid):
                     continue
                 lo = z_sill + (z_head - z_sill) * (1.0 - band) / 2.0
                 hi = z_head - (z_head - z_sill) * (1.0 - band) / 2.0
+
+                def at(p_lo, p_hi, z):
+                    t = min(1.0, max(0.0, (z - lv.ffl) / span))
+                    return (p_lo[0] + (p_hi[0] - p_lo[0]) * t,
+                            p_lo[1] + (p_hi[1] - p_lo[1]) * t, z)
+
+                def strip(z_a, z_b, material):
+                    scene.face([at(a0, a1, z_a), at(b0, b1, z_a),
+                                at(b0, b1, z_b), at(a0, a1, z_b)], material)
+
                 if lo > base + 0.05:
-                    scene.face([(a[0], a[1], base), (b[0], b[1], base),
-                                (b[0], b[1], lo), (a[0], a[1], lo)],
-                               solid if solid != "glass"
-                               else ("wall" if i == 0 else "spandrel"))
+                    strip(base, lo, solid if solid != "glass"
+                          else ("wall" if i == 0 else "spandrel"))
                 if hi > lo + 0.05:
-                    scene.face([(a[0], a[1], lo), (b[0], b[1], lo),
-                                (b[0], b[1], hi), (a[0], a[1], hi)], "glass")
+                    strip(lo, hi, "glass")
                 if z_head > hi + 0.05:
-                    scene.face([(a[0], a[1], hi), (b[0], b[1], hi),
-                                (b[0], b[1], z_head), (a[0], a[1], z_head)],
-                               solid if solid != "glass" else "spandrel")
+                    strip(hi, z_head,
+                          solid if solid != "glass" else "spandrel")
         if i and cutaway is not None:
             _slab(scene, project, i, lv, keep)
 

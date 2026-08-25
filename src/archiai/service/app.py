@@ -135,7 +135,11 @@ async def parse(req: ParseRequest, _=Depends(require_key)):
            "read_by": how, "read_note": why, "intent": spec.intent}
     for move in B.Spec.MOVES:
         v = getattr(spec, move, None)
-        if v:
+        if not v:
+            continue
+        if move == "form":                  # a composition, said in words
+            out["form"] = v.describe()
+        else:
             out[move] = v
     return ParseResponse(
         spec=out, assumptions=spec.assumptions,

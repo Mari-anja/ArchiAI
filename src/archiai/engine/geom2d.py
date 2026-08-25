@@ -110,6 +110,32 @@ def resample(ring, max_seg, closed=True):
     return out
 
 
+def resample_even(ring, n):
+    """`n` points spread evenly by distance around a ring.
+
+    Two rings sampled this way can be stitched to each other even when they
+    are different shapes, which is what a facade between two unlike floors
+    needs."""
+    r = dedupe(ring)
+    if len(r) < 3 or n < 3:
+        return list(r)
+    m = len(r)
+    seg = [math.dist(r[i], r[(i + 1) % m]) for i in range(m)]
+    total = sum(seg)
+    if total < TOL:
+        return list(r)
+    out, i, run = [], 0, 0.0
+    for k in range(n):
+        want = total * k / n
+        while i < m - 1 and run + seg[i] < want:
+            run += seg[i]
+            i += 1
+        a, b = r[i], r[(i + 1) % m]
+        t = (want - run) / seg[i] if seg[i] > TOL else 0.0
+        out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
+    return out
+
+
 def rotate(ring, deg, about=(0.0, 0.0)):
     a = math.radians(deg)
     c, s = math.cos(a), math.sin(a)

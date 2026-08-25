@@ -2210,3 +2210,199 @@ def test_an_exported_key_that_hides_the_file_says_so():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     body = open(os.path.join(root, "run.py")).read()
     assert "unset ANTHROPIC_API_KEY" in body      # and the fix is named
+
+
+# --- building something other than a box ------------------------------------
+
+def _box(w, h, cx=0.0, cy=0.0):
+    return [[(cx - w / 2, cy - h / 2), (cx + w / 2, cy - h / 2),
+             (cx + w / 2, cy + h / 2), (cx - w / 2, cy + h / 2)]]
+
+
+def _area(rings):
+    from archiai.engine import clip as CL
+    return sum(CL.signed_area(r) for r in rings)
+
+
+def test_two_polygons_can_be_added_subtracted_and_intersected():
+    """Everything else here rests on these three being exactly right."""
+    from archiai.engine import clip as CL
+    a, b = _box(10, 10), _box(10, 10, 5, 0)
+    assert abs(_area(CL.union(a, b)) - 150) < 1e-6
+    assert abs(_area(CL.intersection(a, b)) - 50) < 1e-6
+    assert abs(_area(CL.difference(a, b)) - 50) < 1e-6
+
+    # a shape that shares a whole edge, which is what stacked buildings do
+    f = _box(10, 10, 10, 0)
+    assert abs(_area(CL.union(a, f)) - 200) < 1e-6
+    assert abs(_area(CL.intersection(a, f))) < 1e-6
+    assert abs(_area(CL.difference(a, f)) - 100) < 1e-6
+
+    # subtracting from the middle makes a hole, oriented so the area subtracts
+    holed = CL.difference(a, _box(4, 4))
+    assert len(holed) == 2 and abs(_area(holed) - 84) < 1e-6
+    assert CL.signed_area(holed[0]) > 0 > CL.signed_area(holed[1])
+
+    # and the degenerate cases do not explode
+    assert CL.union(a, a) and abs(_area(CL.union(a, a)) - 100) < 1e-6
+    assert abs(_area(CL.difference(a, a))) < 1e-6
+    assert CL.intersection(a, _box(10, 10, 90, 90)) == []
+
+
+def test_the_boolean_holds_for_shapes_nobody_thought_of():
+    """Area identities that must hold for any two polygons at all."""
+    import math, random
+    from archiai.engine import clip as CL
+
+    def rect(w, h, cx, cy, rot):
+        pts = [(-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2), (-w / 2, h / 2)]
+        c, s = math.cos(rot), math.sin(rot)
+        return [[(cx + x * c - y * s, cy + x * s + y * c) for (x, y) in pts]]
+
+    def poly(n, r, cx, cy, ph):
+        return [[(cx + r * math.cos(ph + 2 * math.pi * i / n),
+                  cy + r * math.sin(ph + 2 * math.pi * i / n)) for i in range(n)]]
+
+    rnd = random.Random(3)
+    for _ in range(120):
+        def shape():
+            cx, cy = rnd.uniform(-8, 8), rnd.uniform(-8, 8)
+            if rnd.random() < 0.5:
+                return rect(rnd.uniform(3, 16), rnd.uniform(3, 16), cx, cy,
+                            rnd.choice([0.0, rnd.uniform(0, math.pi)]))
+            return poly(rnd.randrange(3, 9), rnd.uniform(3, 9), cx, cy,
+                        rnd.uniform(0, 2))
+        A, B = shape(), shape()
+        aA, aB = _area(A), _area(B)
+        u = _area(CL.union(A, B))
+        i = _area(CL.intersection(A, B))
+        d = _area(CL.difference(A, B))
+        assert abs((aA + aB) - (u + i)) < 1e-4, (aA, aB, u, i)
+        assert abs(d - (aA - i)) < 1e-4
+        assert u >= aA - 1e-6 and i <= aA + 1e-6
+        assert min(u, i, d) > -1e-6
+
+
+def test_a_building_can_be_made_of_more_than_one_piece():
+    from archiai.engine import form as F, massing as M
+    crossed = F.Form([F.Volume("box", 76, 20, base=0, top=34),
+                      F.Volume("box", 76, 20, rotation=64, base=0, top=34)])
+    r = crossed.region_at(10.0)
+    assert r is not None and len(r.outer) == 12       # a cross, not a box
+    assert r.area > 76 * 20 and r.area < 2 * 76 * 20  # they overlap once
+
+    carved = F.Form([F.Volume("box", 60, 40, base=0, top=30),
+                     F.Volume("cylinder", 20, 20, x=-12, base=0, top=30,
+                              op=F.CUT)])
+    assert carved.region_at(5.0).area < 60 * 40
+
+    # a piece that only exists higher up is not there at the bottom
+    stacked = F.Form([F.Volume("box", 60, 40, base=0, top=12),
+                      F.Volume("box", 24, 24, base=12, top=60)])
+    assert abs(stacked.region_at(5.0).area - 2400) < 1.0
+    assert abs(stacked.region_at(30.0).area - 576) < 1.0
+    assert stacked.region_at(70.0) is None
+
+    # and it drives the whole engine, not just the geometry
+    massing = M.Composite(crossed, storeys=8, floor_to_floor=4.2)
+    assert len(massing.levels) == 8
+    assert len(massing.levels[0].plate.outer) == 12
+    assert massing.mesh().v and massing.section((0, 0), (1.0, 0.0))
+
+
+def test_a_plan_that_turns_gets_a_facade_and_not_a_row_of_slots():
+    """A twisting tower drawn as stacked boxes has gaps you see through."""
+    from archiai.engine import form as F, massing as M, view as V, layout as L
+    from archiai.engine import project as PJ
+    twisting = F.Form([F.Volume("box", 40, 40, base=0, top=60, twist=1.5)])
+    m = M.Composite(twisting, storeys=14, floor_to_floor=4.2)
+
+    lower, upper, _ = m.wall_strips(0)[0]
+    assert len(lower) == len(upper)
+    assert any(abs(a[0] - b[0]) > 0.2 or abs(a[1] - b[1]) > 0.2
+               for a, b in zip(lower, upper))          # it really does move
+
+    # a step is not a twist: podium to tower stays vertical, with a terrace
+    stepped = F.Form([F.Volume("box", 70, 50, base=0, top=12),
+                      F.Volume("box", 24, 24, base=0, top=60)])
+    ms = M.Composite(stepped, storeys=14, floor_to_floor=4.2)
+    for i in range(len(ms.levels) - 1):
+        lo, up, _ = ms.wall_strips(i)[0]
+        if abs(ms.levels[i].plate.area - ms.levels[i + 1].plate.area) > 100:
+            assert lo == up, "a step must not be lofted into a slope"
+
+    p = PJ.Project(m, L.Brief(use="office", name="Twist"))
+    assert len(V.render(p, "aerial-ne", width=600, height=380)) > 10000
+
+
+def test_a_composition_reaches_the_engine_from_the_words(tmp_path=None):
+    from archiai.engine import interpret as IN
+    base = dict(use="office", storeys=12, area_m2=18000, shape="bar",
+                entrance="south", entrance_stated=True, floor_to_floor_m=4.2,
+                lift_m=0, columns={}, cores_to_ground=0, ground="paved",
+                facade="concrete", setback_m=0, void_growth_m=0,
+                name="Crossed", intent="x", unreadable=[])
+
+    def vol(**kw):
+        d = dict(shape="box", width_m=40, depth_m=24, sides=4, x_m=0, y_m=0,
+                 rotation_deg=0, base_m=0, top_m=40, twist_deg_per_m=0,
+                 taper_per_m=0, op="add")
+        d.update(kw)
+        return d
+
+    spec = IN.to_spec(dict(base, volumes=[
+        vol(width_m=76, depth_m=20, top_m=44),
+        vol(width_m=76, depth_m=20, rotation_deg=64, top_m=44)]), "crossed")
+    assert spec.form is not None and len(spec.form.volumes) == 2
+
+    massing, brf = B.build(spec)
+    assert massing.name == "composite"
+    assert len(massing.levels[0].plate.outer) == 12
+    assert abs(massing.gia() - 18000) < 18000 * 0.03   # sized to what was asked
+
+    p = PJ.Project(massing, brf)
+    with tempfile.TemporaryDirectory() as d:
+        assert p.build(d, disciplines=["architecture"])
+
+    # and a plain brief still takes the simple path
+    plain = IN.to_spec(dict(base, volumes=[]), "a 3 storey office")
+    assert plain.form is None
+    assert B.build(plain)[0].name == "extrusion"
+
+
+def test_volumes_that_cannot_stand_up_are_refused_or_repaired():
+    from archiai.engine import interpret as IN
+    base = dict(use="office", storeys=8, area_m2=None, shape="bar",
+                entrance="south", entrance_stated=True, floor_to_floor_m=4.2,
+                lift_m=0, columns={}, cores_to_ground=0, ground="paved",
+                facade="glass", setback_m=0, void_growth_m=0, name="X",
+                intent="x", unreadable=[])
+
+    def vol(**kw):
+        d = dict(shape="box", width_m=40, depth_m=24, sides=4, x_m=0, y_m=0,
+                 rotation_deg=0, base_m=0, top_m=40, twist_deg_per_m=0,
+                 taper_per_m=0, op="add")
+        d.update(kw)
+        return d
+
+    # nothing but cuts: there is nothing to cut into
+    s = IN.to_spec(dict(base, volumes=[vol(op="cut")]), "x")
+    assert s.form is None
+    assert any("cut" in a for a in s.assumptions)
+
+    # a mass floating in the air is brought down to the ground
+    s = IN.to_spec(dict(base, volumes=[vol(base_m=30, top_m=60)]), "x")
+    assert s.form is not None and s.form.region_at(0.5) is not None
+    assert any("reached the ground" in a for a in s.assumptions)
+
+    # pieces that fall apart are built, and said out loud
+    s = IN.to_spec(dict(base, volumes=[vol(x_m=-60), vol(x_m=60)]), "x")
+    assert any("come apart" in a for a in s.assumptions)
+
+    # and absurd numbers are clamped rather than believed
+    s = IN.to_spec(dict(base, volumes=[
+        vol(width_m=99999, depth_m=-4, base_m=900, top_m=1, twist_deg_per_m=99,
+            taper_per_m=9)]), "x")
+    v = s.form.volumes[0]
+    assert 4 <= v.width <= 400 and 4 <= v.depth <= 400
+    assert v.top > v.base and abs(v.twist) <= 4 and abs(v.taper) <= 0.03

@@ -21,6 +21,7 @@ import json
 import os
 
 from . import brief as B
+from . import form as F
 
 
 class NotConfigured(RuntimeError):
@@ -146,6 +147,71 @@ SCHEMA = {
                            "monolithic. 0 for a void of constant size. Needs "
                            "shape 'courtyard'.",
         },
+        "volumes": {
+            "type": "array",
+            "description": "The building as pieces, when it is not a single "
+                           "simple mass. Leave it empty for an ordinary block, "
+                           "bar, tower or courtyard building -- `shape` covers "
+                           "those and is better at them. Reach for volumes "
+                           "when the brief describes a composition: two wings "
+                           "crossing, a tower standing off a podium, a slab "
+                           "with a canyon cut through it, a mass that twists "
+                           "or tapers as it rises, a block split in two. "
+                           "Pieces must touch or overlap so the building is "
+                           "one thing; the first one should sit on the ground.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "shape": {
+                        "type": "string",
+                        "enum": ["box", "cylinder", "polygon", "wedge"],
+                    },
+                    "width_m": {"type": "number",
+                                "description": "East-west size, 4 to 400."},
+                    "depth_m": {"type": "number",
+                                "description": "North-south size, 4 to 400."},
+                    "sides": {"type": "integer",
+                              "description": "For a polygon: 3 to 24. "
+                                             "Ignored otherwise."},
+                    "x_m": {"type": "number",
+                            "description": "Centre east of the site centre, "
+                                           "-200 to 200."},
+                    "y_m": {"type": "number",
+                            "description": "Centre north of the site centre, "
+                                           "-200 to 200."},
+                    "rotation_deg": {"type": "number",
+                                     "description": "Turned in plan, 0 to 360."},
+                    "base_m": {"type": "number",
+                               "description": "Height its underside sits at. "
+                                              "0 for a piece on the ground."},
+                    "top_m": {"type": "number",
+                              "description": "Height its top reaches, above "
+                                             "base_m, at most 250."},
+                    "twist_deg_per_m": {
+                        "type": "number",
+                        "description": "Degrees it turns for every metre it "
+                                       "rises, -4 to 4. About 0.8 reads as a "
+                                       "twisting tower; 0 for a straight one.",
+                    },
+                    "taper_per_m": {
+                        "type": "number",
+                        "description": "Fraction of its size gained per metre "
+                                       "of height, -0.03 to 0.03. Negative "
+                                       "narrows it going up.",
+                    },
+                    "op": {
+                        "type": "string", "enum": ["add", "cut"],
+                        "description": "'add' builds this piece; 'cut' carves "
+                                       "it out of the pieces already there -- "
+                                       "a slot, a canyon, a notch, a void.",
+                    },
+                },
+                "required": ["shape", "width_m", "depth_m", "sides", "x_m",
+                             "y_m", "rotation_deg", "base_m", "top_m",
+                             "twist_deg_per_m", "taper_per_m", "op"],
+                "additionalProperties": False,
+            },
+        },
         "name": {
             "type": "string",
             "description": "A short project name, two or three words, taken "
@@ -175,7 +241,8 @@ SCHEMA = {
     "required": ["use", "use_is_a_stretch", "asked_for", "storeys", "area_m2",
                  "shape", "entrance", "entrance_stated", "floor_to_floor_m",
                  "lift_m", "columns", "cores_to_ground", "ground", "facade",
-                 "setback_m", "void_growth_m", "name", "intent", "unreadable"],
+                 "setback_m", "void_growth_m", "volumes", "name", "intent",
+                 "unreadable"],
     "additionalProperties": False,
 }
 
@@ -321,6 +388,73 @@ def read(text, model=None, timeout=60.0):
 
 
 # ---------------------------------------------------------------------------
+def _volumes(data, notes):
+    """Volumes the reader described, clamped to what can be stood up.
+
+    A composition is the one part of the vocabulary where the model can
+    describe something that cannot exist -- pieces floating apart in the air,
+    a mass 900 m tall, a cut that removes everything. Each is caught here and
+    said out loud rather than built into a nonsense."""
+    raw = data.get("volumes") or []
+    if not isinstance(raw, list) or not raw:
+        return None
+
+    def num(d, k, lo, hi, default):
+        try:
+            return max(lo, min(hi, float(d[k])))
+        except (KeyError, TypeError, ValueError):
+            return default
+
+    out = []
+    for d in raw[:8]:
+        if not isinstance(d, dict):
+            continue
+        base = num(d, "base_m", 0.0, 240.0, 0.0)
+        top = num(d, "top_m", 0.0, 250.0, base + 12.0)
+        if top <= base + 2.0:
+            top = base + 12.0
+        shape = str(d.get("shape") or "box").lower()
+        out.append(F.Volume(
+            shape=shape if shape in F.SHAPES else "box",
+            width=num(d, "width_m", 4.0, 400.0, 40.0),
+            depth=num(d, "depth_m", 4.0, 400.0, 24.0),
+            sides=int(num(d, "sides", 3, 24, 6)),
+            x=num(d, "x_m", -200.0, 200.0, 0.0),
+            y=num(d, "y_m", -200.0, 200.0, 0.0),
+            rotation=num(d, "rotation_deg", -360.0, 360.0, 0.0),
+            base=base, top=top,
+            twist=num(d, "twist_deg_per_m", -4.0, 4.0, 0.0),
+            taper=num(d, "taper_per_m", -0.03, 0.03, 0.0),
+            op=F.CUT if str(d.get("op")) == "cut" else F.ADD))
+    if not out:
+        return None
+    if not any(v.op == F.ADD for v in out):
+        notes.append("Every piece described was a cut, with nothing to cut "
+                     "into, so the shape was built as a simple block instead.")
+        return None
+
+    form = F.Form(out)
+    # It has to reach the ground, and it has to be one building.
+    if form.region_at(0.2) is None:
+        lowest = min(v.base for v in out if v.op == F.ADD)
+        for v in out:
+            if v.op == F.ADD and abs(v.base - lowest) < 1e-6:
+                v.top -= v.base
+                v.base = 0.0
+        notes.append("Nothing reached the ground, so the lowest piece was "
+                     "brought down to it.")
+        form = F.Form(out)
+        if form.region_at(0.2) is None:
+            return None
+    apart = [z for z in (0.2, form.height * 0.3, form.height * 0.6,
+                         form.height * 0.9) if form.pieces_at(z) > 1]
+    if apart:
+        notes.append("The pieces come apart into separate buildings partway "
+                     "up; the drawings follow the largest one, because a set "
+                     "of drawings describes one building.")
+    return form
+
+
 def _an(word):
     return ("an " if word[:1].lower() in "aeiou" else "a ") + word
 
@@ -371,6 +505,8 @@ def to_spec(data, text=""):
         "material": cols.get("material") or "concrete",
     }
 
+    notes = []
+    form = _volumes(data, notes)
     spec = B.Spec(
         use=use, storeys=storeys, area=area, shape=shape, entrance=entrance,
         name=(str(data.get("name") or "").strip() or None),
@@ -383,6 +519,9 @@ def to_spec(data, text=""):
                        if shape == "courtyard" else 0.0),
         intent=(str(data.get("intent") or "").strip() or None),
     )
+    spec.form = form
+    for n in notes:
+        spec.assume(n)
     if f2f is None:
         spec.floor_to_floor = B.USE_DEFAULTS[use]["f2f"]
 

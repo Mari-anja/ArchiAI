@@ -90,6 +90,10 @@ async function parse() {
     if (s.setback) moves.push(`upper floors stepped in ${(+s.setback).toFixed(1)} m`);
     if (moves.length) html += `, ${moves.join(", ")}`;
     html += `. About ${d.estimated_sheets} sheets.`;
+    if (s.form && s.form.length)
+      html += `<br><b>Built from ${s.form.length} volume` +
+              `${s.form.length > 1 ? "s" : ""}:</b><ul class="vols">` +
+              s.form.map(v => `<li>${v}</li>`).join("") + "</ul>";
     if (d.assumptions.length)
       html += `<br><b>Assumed:</b> ${d.assumptions.join(" ")}`;
     if (s.read_by === "keyword")

@@ -216,6 +216,33 @@ class Massing:
     def height(self):
         return self.mesh().bounds()[5]
 
+    def wall_strips(self, i, samples=64):
+        """The facade of level i, as pairs of (lower point, upper point).
+
+        A building whose plan is the same all the way up has vertical walls
+        and this is trivial. One whose plan turns or grows between floors does
+        not: its facade is a surface ruled between the plate below and the
+        plate above, and drawing it as a vertical extrusion of each floor
+        leaves the gaps you can see straight through."""
+        lv = self.levels[i]
+        lo = lv.plate
+        hi = self.levels[i + 1].plate if i + 1 < len(self.levels) else lo
+        # A gradual change -- a twist, a taper -- is a ruled facade. A step
+        # is not: a tower standing off a podium has a vertical wall and a flat
+        # terrace, and lofting between them would slope the podium inwards.
+        gradual = (hi is not lo and lo.area > 1e-6
+                   and 0.75 <= hi.area / lo.area <= 1.34
+                   and len(hi.rings) == len(lo.rings))
+        out = []
+        for k, ring in enumerate(lo.rings):
+            a = G.resample_even(ring, samples)
+            if not gradual:
+                out.append((a, a, k > 0))
+                continue
+            b = _phase_match(a, G.resample_even(hi.rings[k], samples))
+            out.append((a, b, k > 0))
+        return out
+
     def footprint(self):
         return self.levels[0].plate
 
@@ -501,6 +528,113 @@ class Extrusion(Massing):
     def joint_heights(self):
         h = [lv.ffl for lv in self.levels if lv.ffl > 1e-6] + [self.top]
         return ([0.0, self.lift] + h) if self.lift else h
+
+
+def _phase_match(a, b):
+    """Roll b so its points line up with a's, for a plan that has turned.
+
+    Without this the facade is stitched corner-to-middle and comes out as a
+    spiral of triangles instead of a wall."""
+    n = len(a)
+    if n != len(b) or n < 3:
+        return b
+    best, score = 0, None
+    for shift in range(n):
+        s = 0.0
+        for i in range(0, n, max(1, n // 16)):
+            p, q = a[i], b[(i + shift) % n]
+            s += (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2
+        if score is None or s < score:
+            best, score = shift, s
+    return b[best:] + b[:best]
+
+
+class Composite(Massing):
+    """A building made of volumes, evaluated one floor at a time.
+
+    Everything downstream -- plans, sections, elevations, schedules, the mesh
+    -- asks a building only for its plate at a level and its cut at a height.
+    A composition can answer both, so a crossed, carved, twisting mass draws
+    exactly like a box does, with no drawing code knowing the difference."""
+
+    name = "composite"
+
+    def __init__(self, form, storeys=2, floor_to_floor=4.2, wall_t=0.35,
+                 ground_ffl=0.0, parapet=1.1, slab_t=0.30):
+        self.form = form
+        self.wall_t, self.parapet, self.f2f = wall_t, parapet, floor_to_floor
+        self.lift, self.columns, self.cores = 0.0, [], []
+        self.split_levels = []          # levels where the plan came apart
+        levels = []
+        for i in range(storeys):
+            z = ground_ffl + i * floor_to_floor
+            plate = form.region_at(z + min(1.2, floor_to_floor * 0.3))
+            if plate is None or plate.area < 1.0:
+                break
+            if form.pieces_at(z + 1.2) > 1:
+                self.split_levels.append(i)
+            levels.append(Level(i, "Level %02d" % i, z, floor_to_floor,
+                                plate, slab_t))
+        if not levels:
+            raise ValueError("the volumes leave nothing to stand on at ground "
+                             "level; check their heights and positions")
+        super().__init__(levels)
+        self.top = levels[-1].ffl + floor_to_floor
+        self.zones = [
+            Zone("CO-GL", "glazing", ground_ffl, self.top, "Facade glazing"),
+            Zone("CO-RF", "roof", self.top, self.top + parapet,
+                 "Roof and parapet"),
+        ]
+
+    def cut(self, z):
+        r = self.form.region_at(z)
+        if r is None or r.area < 1e-6:
+            for lv in reversed(self.levels):
+                if z >= lv.ffl - 1e-9:
+                    return lv.band(self.wall_t)
+            return self.levels[0].band(self.wall_t)
+        return r.band(self.wall_t)
+
+    def build_mesh(self):
+        m = Mesh()
+        for i, lv in enumerate(self.levels):
+            z0 = lv.ffl
+            z1 = (self.levels[i + 1].ffl if i + 1 < len(self.levels)
+                  else self.top + self.parapet)
+            if i:
+                prev = self.levels[i - 1].plate
+                _collar_faces(m, prev, lv.plate, z0)
+            for ring in lv.plate.rings:
+                r = G.resample(ring, 3.0)
+                n = len(r)
+                for k in range(n):
+                    a, b = r[k], r[(k + 1) % n]
+                    m.quad((a[0], a[1], z0), (b[0], b[1], z0),
+                           (b[0], b[1], z1), (a[0], a[1], z1), "wall")
+        top = self.levels[-1].plate
+        m.face(m.add([(x, y, self.top) for (x, y) in G.resample(top.outer, 4.0)]),
+               "roof")
+        return m
+
+    def joint_heights(self):
+        return [lv.ffl for lv in self.levels if lv.ffl > 1e-6] + [self.top]
+
+
+def _collar_faces(m, lower, upper, z):
+    """The horizontal surface where one floor is wider or narrower than the
+    next: a terrace where the mass steps in, a soffit where it steps out."""
+    for ring in (lower.outer, upper.outer):
+        pass
+    a = G.resample(lower.outer, 4.0)
+    b = G.resample(upper.outer, 4.0)
+    n = min(len(a), len(b))
+    if n < 3:
+        return
+    for k in range(n):
+        p0, p1 = a[k * len(a) // n], a[((k + 1) % n) * len(a) // n]
+        q0, q1 = b[k * len(b) // n], b[((k + 1) % n) * len(b) // n]
+        m.quad((p0[0], p0[1], z), (p1[0], p1[1], z),
+               (q1[0], q1[1], z), (q0[0], q0[1], z), "soffit")
 
 
 # ---------------------------------------------------------------------------

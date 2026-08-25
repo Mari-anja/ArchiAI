@@ -10,6 +10,7 @@ import re
 from . import geom2d as G
 from . import layout as L
 from . import massing as M
+from . import form as FM
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +132,7 @@ class Spec:
     # engine cannot build, because a vocabulary that promises more than the
     # thing behind it is worse than a small one.
     MOVES = ("lift_m", "columns", "cores_to_ground", "ground", "facade",
-             "courtyard_fraction", "setback", "void_growth_m")
+             "courtyard_fraction", "setback", "void_growth_m", "form")
 
     def __init__(self, use="office", storeys=3, area=None, shape="bar",
                  entrance=270.0, name=None, floor_to_floor=None,
@@ -160,6 +161,9 @@ class Spec:
         self.courtyard_fraction = courtyard_fraction
         self.setback = setback                  # metres stepped in up the mass
         self.void_growth_m = max(0.0, float(void_growth_m or 0.0))
+        # A composition of volumes, when the brief described one. It wins over
+        # `shape`, which can only ever name a single primitive.
+        self.form = None
         self.intent = intent                    # the sentence it was read from
         self.assumptions = []
 
@@ -291,6 +295,36 @@ def size_for_area(family, target_plate, lo=8.0, hi=420.0, tol=0.004):
     return (lo + hi) / 2.0
 
 
+def _from_form(spec, form):
+    """A composed building, sized to the area asked for if one was given."""
+    f2f = spec.floor_to_floor or USE_DEFAULTS[spec.use]["f2f"]
+    storeys = spec.storeys or max(1, int(form.height / f2f))
+
+    def make(k):
+        if abs(k - 1.0) < 1e-9:
+            return form
+        scaled = []
+        for v in form.volumes:
+            w = FM.Volume(
+                shape=v.shape, width=v.width * k, depth=v.depth * k,
+                sides=v.sides, x=v.x * k, y=v.y * k, rotation=v.rotation,
+                base=v.base, top=v.top, twist=v.twist / max(k, 1e-6),
+                taper=v.taper, op=v.op, outline=v.outline)
+            scaled.append(w)
+        return FM.Form(scaled, form.name)
+
+    massing = M.Composite(make(1.0), storeys=storeys, floor_to_floor=f2f)
+    if spec.area:
+        k = 1.0
+        for _ in range(6):
+            err = massing.gia() / spec.area
+            if abs(err - 1.0) < 0.01:
+                break
+            k /= math.sqrt(err)
+            massing = M.Composite(make(k), storeys=storeys, floor_to_floor=f2f)
+    return massing
+
+
 def build(spec):
     """Spec -> (massing, brief). The engine takes it from here."""
     d = USE_DEFAULTS[spec.use]
@@ -328,6 +362,17 @@ def build(spec):
                            setbacks=setbacks, lift=spec.lift_m,
                            columns=cols, cores=cores,
                            void_growth=spec.void_growth_m)
+
+    if getattr(spec, "form", None) is not None:
+        massing = _from_form(spec, spec.form)
+        brief = L.Brief(use=spec.use, daylight_depth=d["daylight"],
+                        corridor_w=d["corridor"], room_width=d["room_w"],
+                        entrance_azimuth=spec.entrance, name=spec.name,
+                        facade=spec.facade or "glass",
+                        ground=spec.ground or "paving")
+        brief.accommodation = ACCOMMODATION[spec.use]
+        brief.internal = INTERNAL[spec.use]
+        return massing, brief
 
     massing = make(s)
     if spec.area:
