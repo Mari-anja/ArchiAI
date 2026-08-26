@@ -88,11 +88,22 @@ def doors(project, level_index):
         out.append(Opening(mark, pos[0], pos[1], r, spec[2] / 1000.0,
                            spec[3] / 1000.0))
         if r.cat == "core":                    # a stair needs two, side by side
+            # Offset along the wall, then put it back on the wall: a small
+            # core has a short wall, and a fixed offset walks the second door
+            # straight off the end of it.
             tx, ty = -pos[1][1], pos[1][0]
             off = spec[2] / 1000.0 / 2.0 + 0.80
-            out.append(Opening("D3", (pos[0][0] + tx * off,
-                                      pos[0][1] + ty * off), pos[1], r,
-                               0.926, 2.04))
+            for k in (1.0, 0.6, 0.35, -1.0, -0.6, -0.35):
+                p = (pos[0][0] + tx * off * k, pos[0][1] + ty * off * k)
+                hit = nearest_on_ring(p, r.ring)
+                if not hit or hit[3] >= 0.04:
+                    continue
+                # Round a corner the wall faces a different way, so take the
+                # normal of the edge the door actually landed on.
+                a, b = r.ring[hit[1]], r.ring[(hit[1] + 1) % len(r.ring)]
+                nx, ny = G._edge_normal(a, b)
+                out.append(Opening("D3", hit[0], (-nx, -ny), r, 0.926, 2.04))
+                break
     if level_index == 0:
         az = math.radians(project.brief.entrance_azimuth)
         x0, y0, x1, y1 = fp.plate.bbox()

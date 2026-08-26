@@ -225,35 +225,113 @@ def subdivide_band(outer, inner, target_w, code_prefix="R", name="Workspace",
     # so a concave corner can never flip the direction mid-run.
     sign = _crossing_sign(outer, cum, inner)
 
+    rings = _band_rings(outer, inner, cum, sign, [i / n for i in range(n)])
+    rooms, idx = [], start_index
+    for ring in rings:
+        if len(ring) >= 3 and min_area <= G.area(ring) <= cap:
+            rooms.append(Room("%s.%02d" % (code_prefix, idx), name, G.ccw(ring),
+                              cat, daylit=daylit))
+            idx += 1
+    return rooms
+
+
+def _band_rings(outer, inner, cum, sign, fracs):
+    """The band between two rings, cut at the given fractions of the outer."""
+    n = len(fracs)
+    if n < 1:
+        return []
     hits = []
-    for i in range(n):
-        p, nrm, _ = _point_and_normal(outer, cum, i / n)
+    for f in fracs:
+        p, nrm, _ = _point_and_normal(outer, cum, f)
         d = (nrm[0] * sign, nrm[1] * sign)
         hit = ray_ring_hit(p, d, inner)
-        if hit is None:                          # try the other side
+        if hit is None:
             hit = ray_ring_hit(p, (-d[0], -d[1]), inner)
-        if hit is None:                          # corner: mitre into it
+        if hit is None:
             hit = nearest_on_ring(p, inner)
         hits.append(hit)
 
     cum_i = _cum(inner)
     walk = _monotonic(cum_i, hits)
-    walk.append(walk[0] + cum_i[-1])             # close the loop
-
-    rooms, idx = [], start_index
+    walk.append(walk[0] + cum_i[-1])
+    out = []
     for i in range(n):
-        outer_pts = ring_arc(outer, _pos_from_frac(outer, cum, i / n),
-                             _pos_from_frac(outer, cum, (i + 1) / n), forward=True)
+        f0, f1 = fracs[i], (fracs[i + 1] if i + 1 < n else fracs[0] + 1.0)
+        outer_pts = ring_arc(outer, _pos_from_frac(outer, cum, f0 % 1.0),
+                             _pos_from_frac(outer, cum, f1 % 1.0), forward=True)
         if walk[i + 1] - walk[i] > 1e-6:
             inner_pts = ring_arc(inner, _pos_at_length(cum_i, walk[i + 1]),
                                  _pos_at_length(cum_i, walk[i]), forward=False)
         else:
             inner_pts = [_pos_point(inner, cum_i, walk[i])]
-        ring = G.dedupe(outer_pts + inner_pts)
-        if len(ring) >= 3 and min_area <= G.area(ring) <= cap:
-            rooms.append(Room("%s.%02d" % (code_prefix, idx), name, G.ccw(ring),
-                              cat, daylit=daylit))
-            idx += 1
+        out.append(G.dedupe(outer_pts + inner_pts))
+    return out
+
+
+def _roll_to(ring, point):
+    """Rotate a ring so it begins at the corner nearest `point`."""
+    if not point or len(ring) < 3:
+        return ring
+    k = min(range(len(ring)), key=lambda i: math.dist(ring[i], point))
+    return ring[k:] + ring[:k]
+
+
+def subdivide_band_to(outer, inner, wants, code_prefix="R", start_index=1,
+                      daylit=True, passes=40, min_area=4.0, start_at=None):
+    """Cut the band into the rooms asked for, each at the size asked for.
+
+    The band is not the same depth all the way round, so a share of its
+    perimeter is not a share of its area. The cuts start proportional to the
+    areas wanted and are then nudged, a few times, until each room is close to
+    the size it is supposed to be. It converges quickly because moving one cut
+    only trades area between its two neighbours."""
+    if not wants:
+        return []
+    outer = _roll_to(G.resample(G.ccw(G.dedupe(outer)), 1.2), start_at)
+    inner = G.resample(G.ccw(G.dedupe(inner)), 1.2)
+    cum = _cum(outer)
+    sign = _crossing_sign(outer, cum, inner)
+    targets = [max(min_area, float(a)) for (_, _, a) in wants]
+    total = sum(targets)
+    n = len(targets)
+
+    widths = [t / total for t in targets]
+    for _ in range(passes):
+        fracs, run = [], 0.0
+        for w in widths:
+            fracs.append(run)
+            run += w
+        rings = _band_rings(outer, inner, cum, sign, fracs)
+        got = [abs(G.area(r)) if len(r) >= 3 else 0.0 for r in rings]
+        have = sum(got) or 1.0
+        worst = 0.0
+        new = []
+        for i in range(n):
+            want = targets[i] * have / total      # share of what there is
+            g = got[i] if got[i] > 1e-9 else want * 0.25
+            worst = max(worst, abs(g - want) / max(want, 1e-9))
+            # A room that came out tiny wants an enormous correction, which
+            # overshoots and steals the whole band from its neighbour. Step
+            # towards the answer instead of jumping at it.
+            step = max(0.4, min(2.5, want / g))
+            new.append(max(1e-4, widths[i] * (0.4 + 0.6 * step)))
+        k = sum(new)
+        widths = [w / k for w in new]
+        if worst < 0.05:
+            break
+
+    fracs, run = [], 0.0
+    for w in widths:
+        fracs.append(run)
+        run += w
+    rooms, idx = [], start_index
+    for i, ring in enumerate(_band_rings(outer, inner, cum, sign, fracs)):
+        if len(ring) < 3 or G.area(ring) < min_area:
+            continue
+        name, cat, _ = wants[i]
+        rooms.append(Room("%s.%02d" % (code_prefix, idx), name, G.ccw(ring),
+                          cat, daylit=daylit))
+        idx += 1
     return rooms
 
 
@@ -328,6 +406,49 @@ def _pos_from_frac(ring, cum, frac):
     return (0, 0.0)
 
 
+# How big one room of each kind actually is. Without this the engine cut a
+# floor into equal slices and labelled them afterwards, so a meeting room, a
+# stair core and an open workspace all came out at exactly the same size --
+# which is not a plan, it is a pie chart with names on it.
+TYPICAL_M2 = {
+    "Internal room": 40.0,
+    # office
+    "Workspace": 220.0, "Meeting suite": 24.0, "Focus rooms": 9.0,
+    "Cafe and social": 90.0, "Café and social": 90.0, "Reception": 55.0,
+    "Plant and stores": 32.0,
+    # school
+    "Classroom": 62.0, "Laboratory": 88.0, "Hall": 220.0, "Library": 130.0,
+    "Staff and admin": 40.0, "Dining": 160.0,
+    # homes
+    "Apartment": 78.0, "Shared amenity": 90.0, "Concierge": 28.0,
+    # gallery
+    "Gallery": 220.0, "Temporary exhibition": 180.0, "Café": 80.0,
+    "Shop and foyer": 70.0, "Workshop and store": 60.0,
+    # laboratory
+    "Write-up and desks": 120.0, "Meeting": 24.0, "Amenity": 60.0,
+    # hotel
+    "Guest room": 32.0, "Restaurant and bar": 130.0,
+    "Lobby and reception": 90.0, "Meeting and events": 70.0,
+    "Back of house": 45.0,
+    # internal, windowless
+    "Meeting room": 22.0, "Focus room": 9.0, "Store and print": 18.0,
+    "Server and comms": 16.0, "WC and showers": 26.0, "WC": 22.0,
+    "Plant and risers": 30.0, "Group room": 20.0, "Resource store": 18.0,
+    "Bin and cycle store": 26.0, "Residents store": 20.0, "Laundry": 24.0,
+    "Collection store": 70.0, "Seminar room": 40.0,
+    "Cold room and store": 26.0, "Equipment room": 30.0,
+    "Housekeeping and linen": 22.0, "Lift lobby": 26.0, "Store": 16.0,
+    "Staff WC": 18.0,
+}
+
+# Rooms that are genuinely one big space rather than a run of cells, so their
+# area goes into a few large rooms instead of many typical ones. This is by
+# name, not by category: an open workspace and a hotel guest room are both
+# the "work" of their building, and only one of them is a single room.
+CONTINUOUS = ("Workspace", "Gallery", "Temporary exhibition", "Hall",
+              "Library", "Dining", "Write-up and desks", "Shared amenity",
+              "Restaurant and bar", "Lobby and reception")
+
 PUBLIC_FIRST = ("recep", "amenity", "meet", "work", "plant")
 UPPER_FIRST = ("work", "meet", "amenity", "plant")
 
@@ -351,6 +472,30 @@ def programme_for_level(brief, level_index):
         total = sum(p[1] for p in prog) or 1.0
         prog = [(n, sh / total, c) for (n, sh, c) in prog]
     return sorted(prog, key=lambda p: rank.index(p[2]) if p[2] in rank else 99)
+
+
+def wanted_rooms(programme, area, min_room=6.0):
+    """A schedule of shares turned into actual rooms of actual sizes.
+
+    "Meeting suite, 13% of a 1300 m2 floor" is 170 m2 of meeting rooms, which
+    is seven rooms of 24 m2 -- not one room of 170. Deciding that here, before
+    any geometry, is the difference between a plan and a pie chart."""
+    wants = []
+    for (name, share, cat) in programme:
+        want = area * float(share)
+        if want < min_room:
+            continue
+        typical = TYPICAL_M2.get(name, 40.0)
+        n = max(1, int(round(want / typical)))
+        if name in CONTINUOUS:
+            n = max(1, min(n, max(1, int(want / max(typical, 60.0)))))
+        each = want / n
+        if each < min_room:
+            n = max(1, int(want / min_room))
+            each = want / n
+        for _ in range(n):
+            wants.append((name, cat, each))
+    return wants
 
 
 def assign_programme(rooms, brief, centre, level_index):
@@ -447,6 +592,120 @@ def _shrunk_ok(parent, child, min_area=MIN_ZONE_M2, samples=48):
     return outside <= len(probe) * 0.02
 
 
+def _entrance_point(plate, brief):
+    """Where the front door is, so the plan can be read out from there."""
+    az = math.radians(getattr(brief, "entrance_azimuth", 270.0))
+    x0, y0, x1, y1 = plate.bbox()
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    reach = max(x1 - x0, y1 - y0)
+    return (cx + math.cos(az) * reach, cy + math.sin(az) * reach)
+
+
+def _fill_bands(bands, leftover, leftover_daylit, brief, plate, prefix,
+                level_index):
+    """Give every band the rooms it should hold, at the sizes they should be.
+
+    The schedule is for a whole floor, and a floor is several bands: a daylit
+    one round the outside and whatever is behind it. Each band gets its share
+    of the rooms that suit it -- the ones that want a window in front, the
+    ones that do not behind -- and each room is cut to its own size rather
+    than to an equal slice of the perimeter."""
+    if leftover is not None:
+        bands = bands + [{"outer": leftover.outer,
+                          "inner": leftover.holes[0] if leftover.holes else None,
+                          "daylit": leftover_daylit, "which": "leftover",
+                          "ring": 99, "area": leftover.area,
+                          "region": leftover}]
+    if not bands:
+        return [], []
+
+    lit = [b for b in bands if b["daylit"]]
+    dark = [b for b in bands if not b["daylit"]]
+    outside = programme_for_level(brief, level_index)
+    # A brief with no schedule at all still gets a floor of rooms, the way it
+    # did before there was a schedule to follow.
+    if not outside:
+        outside = [("Workspace", 1.0, "work")]
+    inside = list(getattr(brief, "internal", []) or [])
+    if inside:
+        rank = ("meet", "amenity", "plant", "work")
+        inside = sorted(inside, key=lambda p: rank.index(p[2])
+                        if p[2] in rank else 99)
+    if not dark:                       # a shallow plan: everything is daylit
+        inside = []
+    elif not inside:
+        inside = [("Internal room", 1.0, "plant")]
+    if not lit:
+        outside, inside = inside or outside, []
+
+    start = _entrance_point(plate, brief)
+    rooms, perimeter = [], []
+    idx = 1
+    for group, prog in ((lit, outside), (dark, inside or outside)):
+        for b in group:
+            wants = wanted_rooms(prog, b["area"])
+            if not wants:
+                continue
+            if b["ring"] == 0 and b["which"] == "perimeter":
+                wants = _with_cores(wants, brief, plate)
+            new = _cut_band(b, wants, brief, prefix, idx, start)
+            rooms += new
+            idx += len(new)
+            if b["ring"] == 0 and b["which"] == "perimeter":
+                perimeter = new
+    _name_cores(rooms, prefix)
+    return rooms, perimeter
+
+
+def _with_cores(wants, brief, plate):
+    """Cores written into the schedule, at a core's size, spaced round it.
+
+    They used to be stamped onto whatever room happened to be in the right
+    place afterwards, which made a stair core as big as the open workspace it
+    replaced. A core is a room with a size of its own, so it belongs in the
+    schedule with everything else."""
+    n = max(2, int(math.ceil(G.perimeter(plate.outer) / brief.core_spacing)))
+    n = min(n, 6)
+    area = max(28.0, min(95.0, brief.core_w * brief.core_depth * 0.85))
+    if area * n > sum(a for (_, _, a) in wants) * 0.35:
+        n = max(1, int(sum(a for (_, _, a) in wants) * 0.35 / area))
+    out = list(wants)
+    step = max(1, len(out) // n)
+    for k in range(n):
+        at = min(len(out), (k * step) + k)
+        out.insert(at, ("Core", "core", area))
+    return out
+
+
+def _name_cores(rooms, prefix):
+    placed = 0
+    for r in rooms:
+        if r.cat == "core" and r.name == "Core":
+            r.name = "Core %s" % chr(ord("A") + placed)
+            r.code = "%s.C%d" % (prefix, placed + 1)
+            placed += 1
+
+
+def _cut_band(b, wants, brief, prefix, idx, start):
+    """One band cut to the rooms wanted, whatever shape the band is."""
+    outer, inner = b["outer"], b["inner"]
+    if inner is None:
+        region = b.get("region")
+        if region is None:
+            return []
+        shrunk = region.offset(min(brief.room_width * 0.5,
+                                   max(1.0, math.sqrt(region.area) * 0.28)))
+        if _shrunk_ok(region, shrunk, 4.0):
+            inner = shrunk.outer
+        else:                                   # too small to ring: one room
+            name, cat, _ = wants[0]
+            return [Room("%s.%02d" % (prefix, idx), name, G.ccw(region.outer),
+                         cat, daylit=b["daylit"])]
+    return subdivide_band_to(outer, inner, wants, code_prefix=prefix,
+                             start_index=idx, daylit=b["daylit"],
+                             start_at=start)
+
+
 def allocate(level, brief, level_index=0):
     """Peel the plate into concentric occupied zones separated by corridors.
 
@@ -461,11 +720,13 @@ def allocate(level, brief, level_index=0):
     rooms, circulation = [], []
     idx = 1
     perimeter_rooms = []
+    bands = []                                # filled with the programme later
 
     cur = plate.offset(brief.wall_t)
     depth = d
     daylit = True
     ring = 0
+    leftover, leftover_daylit = None, True
     budget = plate.area                       # never allocate more than the floor
 
     while ring < MAX_RINGS and _viable(cur) and budget > MIN_ZONE_M2:
@@ -474,25 +735,17 @@ def allocate(level, brief, level_index=0):
             # Nothing worth a corridor behind this band: the rest is one zone.
             for (o, i, which) in _band_pairs(cur, cur.offset(min(depth, 2.0))):
                 pass
-            new = _rooms_from_region(cur, brief, prefix, idx, daylit, ring)
-            rooms += new
-            if ring == 0:
-                perimeter_rooms = new
-            idx += len(new)
+            leftover, leftover_daylit = cur, daylit
             cur = None
             break
 
         for (o, i, which) in _band_pairs(cur, nxt):
             if G.area(o) < 4.0 or G.area(i) < 4.0:
                 continue
-            new = subdivide_band(o, i, brief.room_width, code_prefix=prefix,
-                                 start_index=idx, daylit=daylit,
-                                 name="Workspace" if daylit else "Internal room")
-            rooms += new
-            budget -= sum(r.area for r in new)
-            if ring == 0 and which == "perimeter":
-                perimeter_rooms = new
-            idx += len(new)
+            bands.append({"outer": o, "inner": i, "daylit": daylit,
+                          "which": which, "ring": ring,
+                          "area": abs(G.area(o) - G.area(i))})
+            budget -= bands[-1]["area"]
 
         after = nxt.offset(cw)
         if not _shrunk_ok(nxt, after):
@@ -505,12 +758,15 @@ def allocate(level, brief, level_index=0):
         cur, depth, daylit = after, brief.room_width * 1.15, False
         ring += 1
 
-    if cur is not None and _viable(cur) and budget > MIN_ZONE_M2:
-        rooms += _rooms_from_region(cur, brief, prefix, idx, False, ring)
+    if leftover is None and cur is not None and _viable(cur) and budget > MIN_ZONE_M2:
+        leftover = cur
+        leftover_daylit = False
 
-    _place_cores(perimeter_rooms or rooms, brief, plate, prefix)
+    rooms, perimeter_rooms = _fill_bands(bands, leftover, leftover_daylit,
+                                         brief, plate, prefix, level_index)
+    if not any(r.cat == "core" for r in rooms):
+        _place_cores(perimeter_rooms or rooms, brief, plate, prefix)
     _ensure_escape(rooms, brief, prefix)
-    assign_programme(rooms, brief, G.centroid(plate.outer), level_index)
     return Floorplan(level, rooms, circulation, plate)
 
 

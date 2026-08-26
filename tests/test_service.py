@@ -2406,3 +2406,79 @@ def test_volumes_that_cannot_stand_up_are_refused_or_repaired():
     v = s.form.volumes[0]
     assert 4 <= v.width <= 400 and 4 <= v.depth <= 400
     assert v.top > v.base and abs(v.twist) <= 4 and abs(v.taper) <= 0.03
+
+
+# --- rooms that are the size a room of that kind actually is -----------------
+
+def test_a_floor_is_a_schedule_of_rooms_not_a_pie_chart():
+    """Every room used to come out the same size, whatever it was."""
+    prog = L.programme_for_level(
+        type("b", (), {"accommodation": B.ACCOMMODATION["office"]})(), 1)
+    wants = L.wanted_rooms(prog, 1300.0)
+    by = {}
+    for (name, cat, a) in wants:
+        by.setdefault(name, []).append(a)
+
+    assert abs(sum(a for (_, _, a) in wants) - 1300.0) < 1.0   # nothing lost
+    assert len(by["Focus rooms"]) > len(by["Meeting suite"]) > len(by["Workspace"])
+    assert 6 <= by["Focus rooms"][0] <= 14        # a focus room is a phone booth
+    assert 16 <= by["Meeting suite"][0] <= 34     # a meeting room seats eight
+    assert by["Workspace"][0] > 120               # open plan is one big space
+    # which is the whole point: they are not all the same
+    sizes = sorted(a for (_, _, a) in wants)
+    assert sizes[-1] / sizes[0] > 8
+
+
+def test_the_floor_is_cut_to_those_sizes_and_not_to_equal_slices():
+    outer = G.rectangle(52, 34)
+    inner = G.rectangle(37, 19)
+    prog = L.programme_for_level(
+        type("b", (), {"accommodation": B.ACCOMMODATION["office"]})(), 1)
+    band = abs(G.area(outer) - G.area(inner))
+    wants = L.wanted_rooms(prog, band)
+    rooms = L.subdivide_band_to(outer, inner, wants)
+
+    assert len(rooms) == len(wants)
+    worst = max(abs(r.area - a) / a for r, (_, _, a) in zip(rooms, wants))
+    assert worst < 0.12, "worst room is %.0f%% off its size" % (100 * worst)
+    assert abs(sum(r.area for r in rooms) - band) / band < 0.03
+    # names travel with the geometry, rather than being applied afterwards
+    assert [r.name for r in rooms] == [n for (n, _, _) in wants]
+
+
+def test_every_use_gets_rooms_of_a_believable_size():
+    """A guest room is not a gallery is not a classroom."""
+    expect = {
+        "office": ("Workspace", 120, 600),
+        "hotel": ("Guest room", 18, 48),
+        "residential": ("Apartment", 45, 130),
+        "school": ("Classroom", 40, 95),
+        "gallery": ("Gallery", 90, 400),
+        "laboratory": ("Laboratory", 45, 260),
+    }
+    for use, (room, lo, hi) in expect.items():
+        spec = B.Spec(use=use, storeys=4, area=5200.0, floor_to_floor=3.8)
+        massing, brf = B.build(spec)
+        fp = PJ.Project(massing, brf).floorplans[2]
+        got = [r.area for r in fp.rooms if r.name == room]
+        assert got, "%s has no %s" % (use, room)
+        avg = sum(got) / len(got)
+        assert lo <= avg <= hi, "%s: %s averages %.0f m2" % (use, room, avg)
+
+        # and a core is a core, not whatever room it landed on
+        cores = [r.area for r in fp.rooms if r.cat == "core"]
+        assert cores, "%s has no core" % use
+        assert all(20 <= c <= 130 for c in cores), (use, cores)
+
+
+def test_the_plate_is_still_all_accounted_for():
+    """Rooms plus circulation still add up to the floor, room by room."""
+    for use in ("office", "hotel", "school"):
+        spec = B.Spec(use=use, storeys=3, area=4200.0, floor_to_floor=3.8)
+        massing, brf = B.build(spec)
+        for fp in PJ.Project(massing, brf).floorplans:
+            used = sum(r.area for r in fp.rooms) + fp.circulation_area
+            assert 0.90 <= used / fp.plate.area <= 1.02, \
+                "%s level %d accounted %.0f%%" % (use, fp.level.index,
+                                                  100 * used / fp.plate.area)
+            assert not any(r.area < 2.0 for r in fp.rooms), "a room of no size"
